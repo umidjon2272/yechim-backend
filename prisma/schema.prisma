@@ -1,0 +1,344 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  SALES
+  SUPPORT
+  INSTALLER
+  DEVELOPER
+  EMPLOYEE
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model User {
+  id               String   @id @default(cuid())
+  name             String
+  email            String?  @unique
+  username         String?  @unique
+  phone            String?  @unique
+  passwordHash     String
+  role             Role     @default(EMPLOYEE)
+  permissions      String[] @default([])
+  status           String   @default("active")
+  avatarUrl        String?
+  refreshTokenHash String?
+  teamId           String?
+  team             Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  assignedCustomers Customer[]     @relation("AssignedCustomers")
+  createdTasks      Task[]         @relation("CreatedTasks")
+  assignedTasks     Task[]         @relation("AssignedTasks")
+  deals             Deal[]         @relation("DealSeller")
+  installations     Installation[]
+  payments          Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([status])
+}
+
+model Team {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  status      String   @default("active")
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Pipeline {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  stages    Stage[]
+  customers Customer[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model Stage {
+  id         String   @id
+  label      String
+  order      Int
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  customers  Customer[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([pipelineId])
+  @@index([pipelineId, order])
+}
+
+model Customer {
+  id                 String          @id @default(cuid())
+  name               String
+  firstName          String?
+  lastName           String?
+  phone              String?         @unique
+  phone2             String?
+  telegram           String?
+  email              String?         @unique
+  service            String?
+  amount             Decimal         @default(0)
+  notes              String?
+  note               String?
+  address            Json?
+  birthDate          String?
+  telegramUsername   String?
+  instagram          String?
+  source             String?
+  customFields       Json?
+  programs           Json?
+  status             String          @default("active")
+  pipelineId         String
+  pipeline           Pipeline        @relation(fields: [pipelineId], references: [id])
+  stageId            String
+  stage              Stage           @relation(fields: [stageId], references: [id])
+  assignedEmployeeId String?
+  assignedEmployee   User?           @relation("AssignedCustomers", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  groups             CustomerGroup[] @relation("CustomerGroups")
+  businesses         Business[]
+  leads              Lead[]
+  deals              Deal[]
+  tasks              Task[]
+  installations      Installation[]
+  deletedAt          DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([stageId])
+  @@index([pipelineId])
+  @@index([assignedEmployeeId])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+model CustomerGroup {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  customers Customer[] @relation("CustomerGroups")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CustomerFieldDef {
+  id        String   @id @default(cuid())
+  label     String
+  type      String
+  options   String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProgramCatalog {
+  id          String   @id @default(cuid())
+  name        String
+  type        String?
+  version     String?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Business {
+  id                 String    @id @default(cuid())
+  name               String
+  businessType       String?
+  phone              String?
+  email              String?
+  address            String?
+  city               String?
+  status             String    @default("active")
+  notes              String?
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  assignedEmployeeId String?
+  deals              Deal[]
+  leads              Lead[]
+  installations      Installation[]
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([assignedEmployeeId])
+}
+
+model Lead {
+  id                 String    @id @default(cuid())
+  title              String
+  source             String?
+  interestLevel      String?
+  need               String?
+  interestedProduct  String?
+  status             String    @default("NEW")
+  expectedValue      Decimal   @default(0)
+  nextFollowUpDate   String?
+  notes              String?
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  businessId         String?
+  business           Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  assignedEmployeeId String?
+  dealId             String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([businessId])
+  @@index([assignedEmployeeId])
+}
+
+model Deal {
+  id                 String         @id @default(cuid())
+  name               String
+  stage              String         @default("NEW")
+  value              Decimal        @default(0)
+  paymentStatus      String         @default("PENDING")
+  installationStatus String         @default("PENDING")
+  expectedCloseDate  String?
+  productsNote       String?
+  customerId         String?
+  customer           Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  businessId         String?
+  business           Business?      @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  salesEmployeeId    String?
+  salesEmployee      User?          @relation("DealSeller", fields: [salesEmployeeId], references: [id], onDelete: SetNull)
+  items              DealItem[]
+  payments           Payment[]
+  installations      Installation[]
+  tasks              Task[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@index([customerId])
+  @@index([businessId])
+  @@index([salesEmployeeId])
+}
+
+model DealItem {
+  id        String   @id @default(cuid())
+  dealId    String
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  product   String
+  quantity  Int      @default(1)
+  unitPrice Decimal  @default(0)
+  discount  Decimal  @default(0)
+  total     Decimal  @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Payment {
+  id         String   @id @default(cuid())
+  dealId     String?
+  deal       Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  customerId String?
+  businessId String?
+  employeeId String?
+  employee   User?    @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  amount     Decimal  @default(0)
+  method     String   @default("CASH")
+  status     String   @default("PAID")
+  date       String?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([dealId])
+  @@index([customerId])
+  @@index([businessId])
+  @@index([employeeId])
+}
+
+model Installation {
+  id                 String    @id @default(cuid())
+  dealId             String?
+  deal               Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  customerId         String?
+  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  businessId         String?
+  business           Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+  dealItemId         String?
+  assignedEmployeeId String?
+  assignedEmployee   User?     @relation(fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  address            String?
+  scheduledDate      String?
+  startedDate        String?
+  completedDate      String?
+  status             String    @default("SCHEDULED")
+  notes              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([dealId])
+  @@index([customerId])
+  @@index([businessId])
+  @@index([assignedEmployeeId])
+}
+
+model Task {
+  id                 String       @id @default(cuid())
+  title              String
+  description        String?
+  status             TaskStatus   @default(TODO)
+  priority           TaskPriority @default(MEDIUM)
+  dueDate            String?
+  assignedToId       String?
+  assignedEmployeeId String?
+  assignedTo         User?        @relation("AssignedTasks", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById        String?
+  createdBy          User?        @relation("CreatedTasks", fields: [createdById], references: [id], onDelete: SetNull)
+  customerId         String?
+  customer           Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  businessId         String?
+  leadId             String?
+  dealId             String?
+  deal               Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  installationId     String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  @@index([assignedToId])
+  @@index([createdById])
+  @@index([customerId])
+  @@index([businessId])
+  @@index([leadId])
+  @@index([dealId])
+  @@index([installationId])
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  customerId String
+  senderType String
+  senderName String
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([customerId])
+}

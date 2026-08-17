@@ -1,0 +1,15 @@
+{
+  "name": "zenix-crm-mock-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "commonjs",
+  "description": "Local-only mock backend for testing the ZENIX CRM frontend. NOT a production backend.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cookie-parser": "^1.4.6",
+    "multer": "^2.0.0"
+  }
+}

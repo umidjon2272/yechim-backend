@@ -1,4 +1,5 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
@@ -12,6 +13,7 @@ export class PermissionsGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly jwt: JwtService,
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -24,13 +26,25 @@ export class PermissionsGuard implements CanActivate {
 
     let payload: any;
     try {
-      payload = await this.jwt.verifyAsync(token, { secret: process.env.JWT_SECRET || 'dev-access-secret' });
+      const secret = this.config.get<string>('JWT_SECRET');
+      if (!secret && this.config.get<string>('NODE_ENV') === 'production') {
+        throw new Error('JWT_SECRET production muhitida majburiy');
+      }
+      payload = await this.jwt.verifyAsync(token, { secret: secret || 'dev-access-secret' });
     } catch {
       throw new UnauthorizedException('Sessiya muddati tugagan');
     }
 
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true, partnerGroup: true } });
-    if (!user || user.status !== 'active' || user.isActive === false) throw new UnauthorizedException('Foydalanuvchi faol emas');
+    if (
+      !user ||
+      !Number.isInteger(payload.sessionVersion) ||
+      payload.sessionVersion !== user.sessionVersion ||
+      user.status !== 'active' ||
+      user.isActive === false
+    ) {
+      throw new UnauthorizedException('Sessiya faol emas');
+    }
     req.user = user;
 
     const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];

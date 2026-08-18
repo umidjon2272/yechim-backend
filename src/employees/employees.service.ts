@@ -100,7 +100,7 @@ export class EmployeesService {
   setStatus(id: string, status: string, actor?: any) {
     if (!['SUPER_ADMIN', 'ADMIN'].includes(actor?.role)) throw new ForbiddenException('Xodim holatini faqat admin o\'zgartiradi');
     return this.prisma.user
-      .update({ where: { id }, data: { status, isActive: status === 'active', refreshTokenHash: status === 'active' ? undefined : null }, include: { team: true, partnerGroup: true } })
+      .update({ where: { id }, data: { status, isActive: status === 'active', refreshTokenHash: status === 'active' ? undefined : null, sessionVersion: { increment: 1 } }, include: { team: true, partnerGroup: true } })
       .then(publicUser);
   }
 
@@ -109,7 +109,7 @@ export class EmployeesService {
     if (!password || String(password).length < 6) throw new ConflictException('Parol kamida 6 belgidan iborat bo\'lishi kerak');
     const user = await this.prisma.user.update({
       where: { id },
-      data: { passwordHash: await bcrypt.hash(password, 12), refreshTokenHash: null },
+      data: { passwordHash: await bcrypt.hash(password, 12), refreshTokenHash: null, sessionVersion: { increment: 1 } },
       include: { team: true, partnerGroup: true },
     });
     return publicUser(user);

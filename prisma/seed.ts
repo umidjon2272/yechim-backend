@@ -23,8 +23,11 @@ async function main() {
     create: { name: 'Sotuv', description: "Sotuv bo'limi" },
   });
 
-  const email = process.env.ADMIN_EMAIL || 'admin@yechim.local';
-  const password = process.env.ADMIN_PASSWORD || 'admin123';
+  const email = process.env.ADMIN_EMAIL?.trim();
+  const password = process.env.ADMIN_PASSWORD;
+  if (!email || !password) {
+    throw new Error('Seed uchun ADMIN_EMAIL va ADMIN_PASSWORD environment variable berilishi shart');
+  }
   const existing = await prisma.user.findFirst({
     where: { OR: [{ email }, { username: 'admin' }] },
   });

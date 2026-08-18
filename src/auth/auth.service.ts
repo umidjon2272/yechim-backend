@@ -42,6 +42,9 @@ export class AuthService {
   }
 
   async login(identifier: string, password: string, res: Response) {
+    // A failed/new login must not leave an unrelated stale cookie active in
+    // the same browser.
+    this.clearCookies(res);
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
@@ -68,7 +71,13 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token eskirgan');
     }
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true, partnerGroup: true } });
-    if (!user?.refreshTokenHash || user.status !== 'active' || user.isActive === false) {
+    if (
+      !user?.refreshTokenHash ||
+      !Number.isInteger(payload.sessionVersion) ||
+      payload.sessionVersion !== user.sessionVersion ||
+      user.status !== 'active' ||
+      user.isActive === false
+    ) {
       this.clearCookies(res);
       throw new UnauthorizedException('Sessiya topilmadi');
     }
@@ -86,7 +95,7 @@ export class AuthService {
     return publicUser(user);
   }
 
-  async logout(userId: string | undefined, refreshToken: string | undefined, res: Response) {
+  async logout(userId: string | undefined, refreshToken: string | undefined, res: Response, accessToken?: string) {
     let resolvedUserId = userId;
     if (!resolvedUserId && refreshToken) {
       try {
@@ -96,7 +105,19 @@ export class AuthService {
         // The cookie is cleared below even when it is already expired.
       }
     }
-    if (resolvedUserId) await this.prisma.user.update({ where: { id: resolvedUserId }, data: { refreshTokenHash: null } }).catch(() => null);
+    if (!resolvedUserId && accessToken) {
+      try {
+        const payload: any = await this.jwt.verifyAsync(accessToken, { secret: this.accessSecret });
+        resolvedUserId = payload.sub;
+      } catch {
+        // The cookie is cleared below even when both tokens are expired.
+      }
+    }
+    if (resolvedUserId) {
+      await this.prisma.user
+        .update({ where: { id: resolvedUserId }, data: { refreshTokenHash: null, sessionVersion: { increment: 1 } } })
+        .catch(() => null);
+    }
     this.clearCookies(res);
     return { ok: true };
   }
@@ -106,24 +127,34 @@ export class AuthService {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const ok = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!ok) throw new UnauthorizedException("Joriy parol noto'g'ri");
-    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(newPassword, 12), refreshTokenHash: null } });
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await bcrypt.hash(newPassword, 12), refreshTokenHash: null, sessionVersion: { increment: 1 } },
+    });
     return { ok: true };
   }
 
   async issueTokens(user: { id: string; role: string }, res: Response) {
-    await this.issueAccessToken(user, res);
+    const session = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { sessionVersion: { increment: 1 } },
+      select: { sessionVersion: true },
+    });
+    const sessionUser = { ...user, sessionVersion: session.sessionVersion };
     const refreshToken = await this.jwt.signAsync(
-      { sub: user.id, role: user.role },
+      { sub: sessionUser.id, role: sessionUser.role, sessionVersion: sessionUser.sessionVersion },
       { secret: this.refreshSecret, expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '30d' },
     );
     await this.prisma.user.update({ where: { id: user.id }, data: { refreshTokenHash: await bcrypt.hash(refreshToken, 12) } });
+
+    await this.issueAccessToken(sessionUser, res);
     const cookieOptions = this.cookieOptions();
     res.cookie(REFRESH_COOKIE, refreshToken, { ...cookieOptions, maxAge: 30 * 24 * 60 * 60 * 1000 });
   }
 
-  private async issueAccessToken(user: { id: string; role: string }, res: Response) {
+  private async issueAccessToken(user: { id: string; role: string; sessionVersion: number }, res: Response) {
     const accessToken = await this.jwt.signAsync(
-      { sub: user.id, role: user.role },
+      { sub: user.id, role: user.role, sessionVersion: user.sessionVersion },
       { secret: this.accessSecret, expiresIn: this.config.get<string>('JWT_EXPIRES_IN') || '15m' },
     );
     const cookieOptions = this.cookieOptions();
@@ -133,6 +164,9 @@ export class AuthService {
   clearCookies(res: Response) {
     res.clearCookie(ACCESS_COOKIE, this.cookieOptions());
     res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
+    // Cookies used by older/demo builds cannot be read by the frontend when
+    // they are httpOnly, so expire the common legacy names server-side too.
+    ['token', 'authToken', 'auth_token', 'sid', 'session', 'sessionId'].forEach((name) => res.clearCookie(name, { path: '/' }));
   }
 
   private cookieOptions() {
@@ -142,10 +176,18 @@ export class AuthService {
   }
 
   private get accessSecret() {
-    return this.config.get<string>('JWT_SECRET') || 'dev-access-secret';
+    const secret = this.config.get<string>('JWT_SECRET');
+    if (!secret && this.isProduction) throw new Error('JWT_SECRET production muhitida majburiy');
+    return secret || 'dev-access-secret';
   }
 
   private get refreshSecret() {
-    return this.config.get<string>('JWT_REFRESH_SECRET') || 'dev-refresh-secret';
+    const secret = this.config.get<string>('JWT_REFRESH_SECRET');
+    if (!secret && this.isProduction) throw new Error('JWT_REFRESH_SECRET production muhitida majburiy');
+    return secret || 'dev-refresh-secret';
+  }
+
+  private get isProduction() {
+    return this.config.get<string>('NODE_ENV') === 'production';
   }
 }

@@ -45,6 +45,7 @@ model User {
   isActive         Boolean        @default(true)
   avatarUrl        String?
   refreshTokenHash String?
+  sessionVersion   Int            @default(0)
   teamId           String?
   team             Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   partnerGroupId   String?

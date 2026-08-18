@@ -2,6 +2,7 @@ import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { publicUser } from '../common/mappers';
 import { Public } from '../permissions/public.decorator';
+import { RequirePermissions } from '../permissions/permissions.decorator';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto, LoginDto, RegisterDto } from './dto';
 
@@ -9,7 +10,9 @@ import { ChangePasswordDto, LoginDto, RegisterDto } from './dto';
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
-  @Public()
+  // Account creation is an admin operation. Keeping this endpoint public
+  // would let anyone create an ADMIN account in production.
+  @RequirePermissions('employees.create')
   @Post('register')
   register(@Body() dto: RegisterDto, @Res({ passthrough: true }) res: Response) {
     return this.auth.register(dto, res);
@@ -30,7 +33,7 @@ export class AuthController {
   @Public()
   @Post('logout')
   logout(@Req() req: Request & { user?: any }, @Res({ passthrough: true }) res: Response) {
-    return this.auth.logout(req.user?.id, (req as any).cookies?.refreshToken, res);
+    return this.auth.logout(req.user?.id, (req as any).cookies?.refreshToken, res, (req as any).cookies?.accessToken);
   }
 
   @Get('me')

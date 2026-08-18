@@ -4,7 +4,7 @@ import { publicUser } from '../common/mappers';
 import { Public } from '../permissions/public.decorator';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { AuthService } from './auth.service';
-import { ChangePasswordDto, LoginDto, RegisterDto } from './dto';
+import { ChangePasswordDto, LoginDto, LogoutDto, RefreshDto, RegisterDto } from './dto';
 
 @Controller('auth')
 export class AuthController {
@@ -26,14 +26,16 @@ export class AuthController {
 
   @Public()
   @Post('refresh')
-  refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    return this.auth.refresh((req as any).cookies?.refreshToken, res);
+  refresh(@Body() dto: RefreshDto, @Res({ passthrough: true }) res: Response) {
+    return this.auth.refresh(dto.refreshToken, res);
   }
 
   @Public()
   @Post('logout')
-  logout(@Req() req: Request & { user?: any }, @Res({ passthrough: true }) res: Response) {
-    return this.auth.logout(req.user?.id, (req as any).cookies?.refreshToken, res, (req as any).cookies?.accessToken);
+  logout(@Req() req: Request & { user?: any }, @Body() dto: LogoutDto, @Res({ passthrough: true }) res: Response) {
+    const authorization = req.headers.authorization;
+    const accessToken = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
+    return this.auth.logout(req.user?.id, dto.refreshToken, res, accessToken);
   }
 
   @Get('me')

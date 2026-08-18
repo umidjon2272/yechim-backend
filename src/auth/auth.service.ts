@@ -8,10 +8,10 @@ import { publicUser, uniqueConflict } from '../common/mappers';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto';
 
-const ACCESS_COOKIE = 'accessToken';
-const REFRESH_COOKIE = 'refreshToken';
 const ACCESS_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+type AuthenticatedUser = { id: string; role: string };
 
 @Injectable()
 export class AuthService {
@@ -35,8 +35,8 @@ export class AuthService {
           permissions: ROLE_DEFAULT_PERMISSIONS.ADMIN,
         },
       });
-      await this.issueTokens(user, res);
-      return publicUser(user);
+      const tokens = await this.issueTokens(user, res);
+      return { ...tokens, user: publicUser(user) };
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email, telefon yoki login allaqachon mavjud');
       throw error;
@@ -44,8 +44,8 @@ export class AuthService {
   }
 
   async login(identifier: string, password: string, res: Response) {
-    // A browser can intentionally switch the active account. This only clears
-    // that browser's cookies; it never revokes sessions on the server.
+    // Token sessions are not stored in browser cookies. Expire cookies from
+    // older builds so they cannot accidentally be reused during migration.
     this.clearCookies(res);
     const user = await this.prisma.user.findFirst({
       where: {
@@ -56,8 +56,11 @@ export class AuthService {
     if (!user || user.status !== 'active' || user.isActive === false) throw new UnauthorizedException("Login yoki parol noto'g'ri");
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException("Login yoki parol noto'g'ri");
-    await this.issueTokens(user, res);
-    return publicUser(user);
+
+    // Every successful login gets an independent server-side session. A login
+    // in another tab creates another UserSession and cannot overwrite this one.
+    const tokens = await this.issueTokens(user, res);
+    return { ...tokens, user: publicUser(user) };
   }
 
   async refresh(refreshToken: string | undefined, res: Response) {
@@ -100,11 +103,11 @@ export class AuthService {
       throw new UnauthorizedException('Sessiya topilmadi');
     }
 
-    // The refresh token belongs to this UserSession only. It is intentionally
-    // not rotated in the database: concurrent tabs sharing a browser cookie
-    // must not invalidate each other during an access-token refresh.
-    await this.issueAccessToken(user, session.id, res);
-    return publicUser(user);
+    // Refresh is scoped to the UserSession identified by the refresh token.
+    // The refresh token remains stable, so concurrent requests in this same
+    // tab do not invalidate one another; only the access token is renewed.
+    const accessToken = await this.issueAccessToken(user, session.id);
+    return { accessToken, user: publicUser(user) };
   }
 
   async logout(userId: string | undefined, refreshToken: string | undefined, res: Response, accessToken?: string) {
@@ -117,7 +120,7 @@ export class AuthService {
         sessionId = payload?.sid;
         resolvedUserId ||= payload?.sub;
       } catch {
-        // The cookies are cleared below even when the refresh token is stale.
+        // The access token below can still identify the current session.
       }
     }
     if (!sessionId && accessToken) {
@@ -126,7 +129,7 @@ export class AuthService {
         sessionId = payload?.sid;
         resolvedUserId ||= payload?.sub;
       } catch {
-        // The cookies are cleared below even when the access token is stale.
+        // Tokens are cleared client-side even when both are stale.
       }
     }
 
@@ -138,6 +141,9 @@ export class AuthService {
         })
         .catch(() => null);
     }
+
+    // Expire legacy cookies only. Current auth is carried by the requesting
+    // tab in sessionStorage and is cleared by that tab's frontend.
     this.clearCookies(res);
     return { ok: true };
   }
@@ -156,7 +162,7 @@ export class AuthService {
     await this.prisma.userSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
   }
 
-  async issueTokens(user: { id: string; role: string }, res: Response) {
+  private async issueTokens(user: AuthenticatedUser, res: Response) {
     const session = await this.prisma.userSession.create({
       data: {
         userId: user.id,
@@ -170,32 +176,24 @@ export class AuthService {
     );
     await this.prisma.userSession.update({ where: { id: session.id }, data: { tokenHash: await bcrypt.hash(refreshToken, 12) } });
 
-    await this.issueAccessToken(user, session.id, res);
-    const cookieOptions = this.cookieOptions();
-    res.cookie(REFRESH_COOKIE, refreshToken, { ...cookieOptions, maxAge: REFRESH_TTL_MS });
+    const accessToken = await this.issueAccessToken(user, session.id);
+    this.clearCookies(res);
+    return { accessToken, refreshToken };
   }
 
-  private async issueAccessToken(user: { id: string; role: string }, sessionId: string, res: Response) {
-    const accessToken = await this.jwt.signAsync(
+  private async issueAccessToken(user: AuthenticatedUser, sessionId: string) {
+    return this.jwt.signAsync(
       { sub: user.id, role: user.role, sid: sessionId },
       { secret: this.accessSecret, expiresIn: this.config.get<string>('JWT_EXPIRES_IN') || '15m' },
     );
-    const cookieOptions = this.cookieOptions();
-    res.cookie(ACCESS_COOKIE, accessToken, { ...cookieOptions, maxAge: ACCESS_TTL_MS });
   }
 
-  clearCookies(res: Response) {
-    res.clearCookie(ACCESS_COOKIE, this.cookieOptions());
-    res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
-    // Cookies used by older/demo builds cannot be read by the frontend when
-    // they are httpOnly, so expire the common legacy names server-side too.
-    ['token', 'authToken', 'auth_token', 'sid', 'session', 'sessionId'].forEach((name) => res.clearCookie(name, { path: '/' }));
-  }
-
-  private cookieOptions() {
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || '';
-    const secure = this.config.get<string>('NODE_ENV') === 'production' || frontendUrl.split(',').some((origin) => origin.trim().startsWith('https://'));
-    return { httpOnly: true, sameSite: secure ? ('none' as const) : ('lax' as const), secure, path: '/' };
+  private clearCookies(res: Response) {
+    // Kept only as a migration cleanup for cookie sessions issued by older
+    // versions. No current auth path reads or writes these cookies.
+    ['accessToken', 'refreshToken', 'token', 'authToken', 'auth_token', 'sid', 'session', 'sessionId'].forEach((name) =>
+      res.clearCookie(name, { path: '/' }),
+    );
   }
 
   private get accessSecret() {

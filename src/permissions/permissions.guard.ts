@@ -61,6 +61,8 @@ export class PermissionsGuard implements CanActivate {
   private extractToken(req: Request) {
     const header = req.headers.authorization;
     if (header?.startsWith('Bearer ')) return header.slice(7);
-    return (req as any).cookies?.accessToken;
+    // Auth is deliberately header-only. Origin-wide cookies would make two
+    // tabs share one account even when their frontend sessions are separate.
+    return undefined;
   }
 }

@@ -51,9 +51,10 @@ ADMIN_PASSWORD=
 
 `FRONTEND_URL` must be the exact Vercel origin (no `/` at the end); multiple
 origins may be comma-separated. `JWT_SECRET` and `JWT_REFRESH_SECRET` must be
-long random production-only values. The frontend uses `credentials: include`,
-so the Render API must return credentialed CORS and the auth cookies are
-`httpOnly`, `secure`, and `SameSite=None` in production.
+long random production-only values. The frontend stores the token pair in each
+tab's `sessionStorage` and sends the access token as `Authorization: Bearer`.
+The backend does not use browser-wide auth cookies; old cookie names are only
+expired as a migration cleanup.
 
 Run `npm run seed` once after the first deploy to create the admin configured
 by `ADMIN_EMAIL`/`ADMIN_PASSWORD`, the `Asosiy savdo` pipeline, and the 9

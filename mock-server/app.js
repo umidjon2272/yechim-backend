@@ -14,7 +14,6 @@
  * `node server.js`) and by `/api/index.js` (Vercel serverless function).
  */
 const express = require('express')
-const cookieParser = require('cookie-parser')
 const multer = require('multer')
 const crypto = require('crypto')
 
@@ -22,7 +21,6 @@ const app = express()
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } })
 
 app.use(express.json())
-app.use(cookieParser())
 
 // ---------------------------------------------------------------------------
 // In-memory data
@@ -89,7 +87,7 @@ function normalizeUserPayload(payload, { existingUser, allowPassword = false } =
 }
 
 const db = {
-  sessions: new Map(), // sid -> userId
+  sessions: new Map(), // sid -> { userId, accessToken, refreshToken, expiresAt }
   users: [],
   teams: [],
   customers: [],
@@ -458,11 +456,12 @@ function publicUser(user) {
 }
 
 function requireAuth(req, res, next) {
-  const sid = req.cookies.sid
-  const userId = sid && db.sessions.get(sid)
-  const user = db.users.find((u) => u.id === userId)
+  const token = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null
+  const session = [...db.sessions.values()].find((item) => item.accessToken === token && item.accessExpiresAt > Date.now())
+  const user = db.users.find((u) => u.id === session?.userId)
   if (!user) return res.status(401).json({ message: 'Sessiya topilmadi. Iltimos qayta kiring.' })
   req.user = user
+  req.authSession = session
   next()
 }
 
@@ -592,15 +591,33 @@ app.post('/api/auth/login', (req, res) => {
   if (user.status === 'inactive') return res.status(403).json({ message: 'Bu xodim nofaol holatda' })
 
   const sid = uid()
-  db.sessions.set(sid, user.id)
-  res.cookie('sid', sid, { httpOnly: true, sameSite: 'lax', path: '/' })
-  res.json(publicUser(user))
+  const session = {
+    userId: user.id,
+    accessToken: uid(),
+    refreshToken: uid(),
+    accessExpiresAt: Date.now() + 15 * 60 * 1000,
+    refreshExpiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+  }
+  db.sessions.set(sid, session)
+  res.json({ accessToken: session.accessToken, refreshToken: session.refreshToken, user: publicUser(user) })
+})
+
+app.post('/api/auth/refresh', (req, res) => {
+  const refreshToken = req.body?.refreshToken
+  const session = [...db.sessions.values()].find((item) => item.refreshToken === refreshToken && item.refreshExpiresAt > Date.now())
+  const user = db.users.find((u) => u.id === session?.userId)
+  if (!session || !user || user.status === 'inactive') return res.status(401).json({ message: 'Sessiya topilmadi' })
+
+  session.accessToken = uid()
+  session.accessExpiresAt = Date.now() + 15 * 60 * 1000
+  res.json({ accessToken: session.accessToken, user: publicUser(user) })
 })
 
 app.post('/api/auth/logout', (req, res) => {
-  const sid = req.cookies.sid
+  const accessToken = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null
+  const refreshToken = req.body?.refreshToken
+  const sid = [...db.sessions.entries()].find(([, session]) => session.accessToken === accessToken || session.refreshToken === refreshToken)?.[0]
   if (sid) db.sessions.delete(sid)
-  res.clearCookie('sid', { path: '/' })
   res.json({ ok: true })
 })
 

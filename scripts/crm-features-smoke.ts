@@ -166,12 +166,17 @@ const taskRecord: any = {
   assignedTo: { id: 'employee-1', name: 'Sardor', role: 'EMPLOYEE' }, createdBy: { id: 'admin-1', name: 'Admin', role: 'ADMIN' },
   customer: null, deal: null,
 };
+let deletedTaskId: string | undefined;
 const taskPrisma: any = {
   user: { findFirst: async () => ({ id: 'employee-1' }) },
   task: {
     create: async ({ data }: any) => ({ ...taskRecord, ...data }),
     findUnique: async () => taskRecord,
     update: async ({ data }: any) => ({ ...taskRecord, ...data }),
+    delete: async ({ where }: any) => {
+      deletedTaskId = where.id;
+      return { id: where.id };
+    },
   },
   activity: { create: async () => null },
   notification: { create: async ({ data }: any) => { taskNotifications.push(data); return data; } },
@@ -189,6 +194,14 @@ await assert.rejects(
   () => tasksService.update('task-1', { status: 'CANCELLED' }, { id: 'employee-1', role: 'EMPLOYEE', permissions: ['tasks.edit'] }),
   /faqat admin/,
   'employees cannot cancel through the generic task update endpoint',
+);
+const deletedTask = await tasksService.remove('task-1', adminUser);
+assert.deepEqual(deletedTask, { ok: true, id: 'task-1' }, 'admin can delete task');
+assert.equal(deletedTaskId, 'task-1', 'delete uses the task id');
+await assert.rejects(
+  () => tasksService.remove('task-1', { id: 'employee-1', role: 'EMPLOYEE', permissions: ['tasks.delete'] }),
+  /Vazifani faqat admin o'chira oladi/,
+  'employee cannot delete task',
 );
 
 const notificationItem: any = {

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { CreateTaskDto } from './dto';
@@ -39,6 +39,7 @@ export class TasksController {
   }
 
   @RequirePermissions('tasks.delete')
+  @HttpCode(HttpStatus.OK)
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req: Request & { user?: any }) {
     return this.tasks.remove(id, req.user);

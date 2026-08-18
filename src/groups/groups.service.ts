@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { toNumber } from '../common/mappers';
+import { partnerGroupIdOf } from '../common/access';
 import { pagination, paged } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -84,8 +85,7 @@ export class GroupsService {
   }
 
   private partnerGroupId(actor?: any) {
-    if (!actor?.partnerGroupId || ['SUPER_ADMIN', 'ADMIN'].includes(actor.role)) return null;
-    return actor.partnerGroupId;
+    return partnerGroupIdOf(actor);
   }
 
   private optionalNumber(value: any) {

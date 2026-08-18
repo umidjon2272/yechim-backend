@@ -10,6 +10,8 @@ import { RegisterDto } from './dto';
 
 const ACCESS_COOKIE = 'accessToken';
 const REFRESH_COOKIE = 'refreshToken';
+const ACCESS_TTL_MS = 15 * 60 * 1000;
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class AuthService {
@@ -42,8 +44,8 @@ export class AuthService {
   }
 
   async login(identifier: string, password: string, res: Response) {
-    // A failed/new login must not leave an unrelated stale cookie active in
-    // the same browser.
+    // A browser can intentionally switch the active account. This only clears
+    // that browser's cookies; it never revokes sessions on the server.
     this.clearCookies(res);
     const user = await this.prisma.user.findFirst({
       where: {
@@ -63,6 +65,7 @@ export class AuthService {
       this.clearCookies(res);
       throw new UnauthorizedException('Refresh token topilmadi');
     }
+
     let payload: any;
     try {
       payload = await this.jwt.verifyAsync(refreshToken, { secret: this.refreshSecret });
@@ -70,52 +73,69 @@ export class AuthService {
       this.clearCookies(res);
       throw new UnauthorizedException('Refresh token eskirgan');
     }
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true, partnerGroup: true } });
+
+    const session = payload?.sid
+      ? await this.prisma.userSession.findUnique({
+          where: { id: payload.sid },
+          include: { user: { include: { team: true, partnerGroup: true } } },
+        })
+      : null;
+    const user = session?.user;
     if (
-      !user?.refreshTokenHash ||
-      !Number.isInteger(payload.sessionVersion) ||
-      payload.sessionVersion !== user.sessionVersion ||
+      !session ||
+      !user ||
+      session.userId !== payload.sub ||
+      session.revokedAt ||
+      session.expiresAt <= new Date() ||
       user.status !== 'active' ||
       user.isActive === false
     ) {
       this.clearCookies(res);
       throw new UnauthorizedException('Sessiya topilmadi');
     }
-    const ok = await bcrypt.compare(refreshToken, user.refreshTokenHash);
+
+    const ok = await bcrypt.compare(refreshToken, session.tokenHash);
     if (!ok) {
       this.clearCookies(res);
       throw new UnauthorizedException('Sessiya topilmadi');
     }
-    // Do not rotate the refresh token here. Several tabs can refresh an
-    // expired access token at the same time; rotating a single stored hash
-    // would make the slower tab look logged out even though the session is
-    // still valid. The refresh JWT is still verified and compared with the
-    // stored hash before this point.
-    await this.issueAccessToken(user, res);
+
+    // The refresh token belongs to this UserSession only. It is intentionally
+    // not rotated in the database: concurrent tabs sharing a browser cookie
+    // must not invalidate each other during an access-token refresh.
+    await this.issueAccessToken(user, session.id, res);
     return publicUser(user);
   }
 
   async logout(userId: string | undefined, refreshToken: string | undefined, res: Response, accessToken?: string) {
+    let sessionId: string | undefined;
     let resolvedUserId = userId;
-    if (!resolvedUserId && refreshToken) {
+
+    if (refreshToken) {
       try {
         const payload: any = await this.jwt.verifyAsync(refreshToken, { secret: this.refreshSecret });
-        resolvedUserId = payload.sub;
+        sessionId = payload?.sid;
+        resolvedUserId ||= payload?.sub;
       } catch {
-        // The cookie is cleared below even when it is already expired.
+        // The cookies are cleared below even when the refresh token is stale.
       }
     }
-    if (!resolvedUserId && accessToken) {
+    if (!sessionId && accessToken) {
       try {
         const payload: any = await this.jwt.verifyAsync(accessToken, { secret: this.accessSecret });
-        resolvedUserId = payload.sub;
+        sessionId = payload?.sid;
+        resolvedUserId ||= payload?.sub;
       } catch {
-        // The cookie is cleared below even when both tokens are expired.
+        // The cookies are cleared below even when the access token is stale.
       }
     }
-    if (resolvedUserId) {
-      await this.prisma.user
-        .update({ where: { id: resolvedUserId }, data: { refreshTokenHash: null, sessionVersion: { increment: 1 } } })
+
+    if (sessionId) {
+      await this.prisma.userSession
+        .updateMany({
+          where: { id: sessionId, ...(resolvedUserId ? { userId: resolvedUserId } : {}) },
+          data: { revokedAt: new Date() },
+        })
         .catch(() => null);
     }
     this.clearCookies(res);
@@ -123,42 +143,45 @@ export class AuthService {
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string, actor?: any) {
-    if (!['SUPER_ADMIN', 'ADMIN'].includes(actor?.role)) throw new ForbiddenException('Parolni faqat admin almashtiradi');
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase())) throw new ForbiddenException('Parolni faqat admin almashtiradi');
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const ok = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!ok) throw new UnauthorizedException("Joriy parol noto'g'ri");
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash: await bcrypt.hash(newPassword, 12), refreshTokenHash: null, sessionVersion: { increment: 1 } },
-    });
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(newPassword, 12) } });
+    await this.revokeAllSessions(userId);
     return { ok: true };
   }
 
-  async issueTokens(user: { id: string; role: string }, res: Response) {
-    const session = await this.prisma.user.update({
-      where: { id: user.id },
-      data: { sessionVersion: { increment: 1 } },
-      select: { sessionVersion: true },
-    });
-    const sessionUser = { ...user, sessionVersion: session.sessionVersion };
-    const refreshToken = await this.jwt.signAsync(
-      { sub: sessionUser.id, role: sessionUser.role, sessionVersion: sessionUser.sessionVersion },
-      { secret: this.refreshSecret, expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '30d' },
-    );
-    await this.prisma.user.update({ where: { id: user.id }, data: { refreshTokenHash: await bcrypt.hash(refreshToken, 12) } });
-
-    await this.issueAccessToken(sessionUser, res);
-    const cookieOptions = this.cookieOptions();
-    res.cookie(REFRESH_COOKIE, refreshToken, { ...cookieOptions, maxAge: 30 * 24 * 60 * 60 * 1000 });
+  async revokeAllSessions(userId: string) {
+    await this.prisma.userSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
   }
 
-  private async issueAccessToken(user: { id: string; role: string; sessionVersion: number }, res: Response) {
+  async issueTokens(user: { id: string; role: string }, res: Response) {
+    const session = await this.prisma.userSession.create({
+      data: {
+        userId: user.id,
+        tokenHash: 'pending',
+        expiresAt: new Date(Date.now() + REFRESH_TTL_MS),
+      },
+    });
+    const refreshToken = await this.jwt.signAsync(
+      { sub: user.id, role: user.role, sid: session.id },
+      { secret: this.refreshSecret, expiresIn: this.config.get<string>('JWT_REFRESH_EXPIRES_IN') || '30d' },
+    );
+    await this.prisma.userSession.update({ where: { id: session.id }, data: { tokenHash: await bcrypt.hash(refreshToken, 12) } });
+
+    await this.issueAccessToken(user, session.id, res);
+    const cookieOptions = this.cookieOptions();
+    res.cookie(REFRESH_COOKIE, refreshToken, { ...cookieOptions, maxAge: REFRESH_TTL_MS });
+  }
+
+  private async issueAccessToken(user: { id: string; role: string }, sessionId: string, res: Response) {
     const accessToken = await this.jwt.signAsync(
-      { sub: user.id, role: user.role, sessionVersion: user.sessionVersion },
+      { sub: user.id, role: user.role, sid: sessionId },
       { secret: this.accessSecret, expiresIn: this.config.get<string>('JWT_EXPIRES_IN') || '15m' },
     );
     const cookieOptions = this.cookieOptions();
-    res.cookie(ACCESS_COOKIE, accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+    res.cookie(ACCESS_COOKIE, accessToken, { ...cookieOptions, maxAge: ACCESS_TTL_MS });
   }
 
   clearCookies(res: Response) {

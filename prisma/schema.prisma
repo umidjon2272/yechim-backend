@@ -44,8 +44,6 @@ model User {
   status           String         @default("active")
   isActive         Boolean        @default(true)
   avatarUrl        String?
-  refreshTokenHash String?
-  sessionVersion   Int            @default(0)
   teamId           String?
   team             Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   partnerGroupId   String?
@@ -55,6 +53,7 @@ model User {
   installerCustomers Customer[]     @relation("CustomerInstallers")
   createdTasks       Task[]         @relation("CreatedTasks")
   assignedTasks      Task[]         @relation("AssignedTasks")
+  sessions           UserSession[]
   activities         Activity[]     @relation("CreatedActivities")
   reminders          Reminder[]     @relation("AssignedReminders")
   createdReminders   Reminder[]     @relation("CreatedReminders")
@@ -69,6 +68,19 @@ model User {
   @@index([role])
   @@index([status])
   @@index([partnerGroupId])
+}
+
+model UserSession {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
 }
 
 model Team {
@@ -187,7 +199,11 @@ model PartnerReward {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  @@unique([groupId, customerId, period])
+  // A customer can earn a partner reward only once for a group. `period`
+  // remains the month in which that one reward was earned, so monthly history
+  // is retained without allowing a second payout after leaving/re-entering the
+  // final stage.
+  @@unique([groupId, customerId])
   @@index([groupId, period])
 }
 
@@ -422,20 +438,21 @@ model Reminder {
 }
 
 model Notification {
-  id                String    @id @default(cuid())
-  userId            String
-  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reminderId        String?   @unique
-  reminder          Reminder? @relation(fields: [reminderId], references: [id], onDelete: Cascade)
-  type              String
-  title             String
-  message           String
-  read              Boolean   @default(false)
-  relatedEntityType String?
-  relatedEntityId   String?
-  createdAt         DateTime  @default(now())
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminderId String?   @unique
+  reminder   Reminder? @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  type       String
+  title      String
+  message    String
+  isRead     Boolean   @default(false)
+  readAt     DateTime?
+  entityType String?
+  entityId   String?
+  createdAt  DateTime  @default(now())
 
-  @@index([userId, read, createdAt])
+  @@index([userId, isRead, createdAt])
 }
 
 model Message {

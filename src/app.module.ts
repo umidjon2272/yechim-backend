@@ -18,6 +18,7 @@ import { ActivitiesModule } from './activities/activities.module';
 import { RemindersModule } from './reminders/reminders.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { InstallationsModule } from './installations/installations.module';
+import { PartnersModule } from './partners/partners.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { InstallationsModule } from './installations/installations.module';
     RemindersModule,
     NotificationsModule,
     InstallationsModule,
+    PartnersModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: PermissionsGuard }],
 })

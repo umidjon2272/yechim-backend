@@ -4,6 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { isAdmin, isPartner } from '../common/access';
 import { IS_PUBLIC_KEY } from './public.decorator';
 import { PERMISSIONS_KEY } from './permissions.decorator';
 
@@ -35,22 +36,21 @@ export class PermissionsGuard implements CanActivate {
       throw new UnauthorizedException('Sessiya muddati tugagan');
     }
 
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true, partnerGroup: true } });
-    if (
-      !user ||
-      !Number.isInteger(payload.sessionVersion) ||
-      payload.sessionVersion !== user.sessionVersion ||
-      user.status !== 'active' ||
-      user.isActive === false
-    ) {
+    const session = payload.sid
+      ? await this.prisma.userSession.findUnique({
+          where: { id: payload.sid },
+          include: { user: { include: { team: true, partnerGroup: true } } },
+        })
+      : null;
+    const user = session?.user;
+    if (!session || !user || session.userId !== payload.sub || session.revokedAt || session.expiresAt <= new Date() || user.status !== 'active' || user.isActive === false) {
       throw new UnauthorizedException('Sessiya faol emas');
     }
     req.user = user;
 
     const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
-    if (!required.length || ['SUPER_ADMIN', 'ADMIN'].includes(user.role)) return true;
-    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(user.role);
-    if (isPartner && required.some((permission) => permission !== 'customers.view')) {
+    if (!required.length || isAdmin(user)) return true;
+    if (isPartner(user) && required.some((permission) => permission !== 'customers.view')) {
       throw new ForbiddenException('Partner faqat biriktirilgan guruh mijozlarini ko\'rishi mumkin');
     }
     const own = user.permissions || [];

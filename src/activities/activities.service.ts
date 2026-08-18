@@ -46,7 +46,7 @@ export class ActivitiesService {
     const item = await this.prisma.activity.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('Faoliyat topilmadi');
     await this.ensureCustomerAccess(item.customerId, user);
-    const canDelete = ['SUPER_ADMIN', 'ADMIN'].includes(user.role) || item.createdById === user.id;
+    const canDelete = ['SUPER_ADMIN', 'ADMIN'].includes(String(user?.role || '').toUpperCase()) || item.createdById === user.id;
     if (!canDelete) throw new ForbiddenException('Bu izohni o\'chirishga ruxsat yo\'q');
     await this.prisma.activity.delete({ where: { id } });
     return { ok: true };
@@ -84,8 +84,9 @@ export class ActivitiesService {
   }
 
   private async ensureCustomerAccess(customerId: string, user: any) {
-    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user.role) || user.permissions?.includes('customers.viewAll');
-    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(user.role);
+    const role = String(user?.role || '').toUpperCase();
+    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(role) || user.permissions?.includes('customers.viewAll');
+    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(role);
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: customerId,
@@ -98,6 +99,6 @@ export class ActivitiesService {
   }
 
   private isPartner(user: any) {
-    return Boolean(user?.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(user.role);
+    return Boolean(user?.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(String(user?.role || '').toUpperCase());
   }
 }

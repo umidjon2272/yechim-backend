@@ -7,6 +7,7 @@ export class InstallationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(query: any, user: any) {
+    this.ensureNotPartner(user);
     const canViewAll = this.canViewAll(user);
     const where: any = {
       ...(canViewAll ? {} : { assignedEmployeeId: user.id }),
@@ -21,6 +22,7 @@ export class InstallationsService {
   }
 
   async get(id: string, user: any) {
+    this.ensureNotPartner(user);
     const item = await this.prisma.installation.findUnique({ where: { id }, include: { customer: true, business: true, deal: true, assignedEmployee: { include: { team: true } } } });
     if (!item) throw new NotFoundException('O\'rnatish topilmadi');
     if (!this.canViewAll(user) && item.assignedEmployeeId !== user.id) throw new ForbiddenException('Bu o\'rnatishga ruxsat yo\'q');
@@ -47,7 +49,13 @@ export class InstallationsService {
   }
 
   private canViewAll(user: any) {
-    return ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user.role) || user.permissions?.includes('installations.viewAll');
+    return ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(user?.role || '').toUpperCase()) || user.permissions?.includes('installations.viewAll');
+  }
+
+  private ensureNotPartner(user: any) {
+    if (user?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(String(user.role).toUpperCase())) {
+      throw new ForbiddenException('Partner o\'rnatish ma\'lumotlarini ko\'ra olmaydi');
+    }
   }
 
   private async ensureCustomerAccess(customerId: string, user: any) {

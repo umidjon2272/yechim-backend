@@ -6,6 +6,7 @@ export class RemindersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(query: any, user: any) {
+    this.ensureNotPartner(user);
     const where: any = { status: 'PENDING' as any };
     if (!this.canViewAll(user)) where.assignedUserId = user.id;
     if (query.customerId) {
@@ -14,7 +15,7 @@ export class RemindersService {
     }
     const bounds = this.dayBounds();
     if (query.overdue === 'true' || query.overdue === true) where.remindAt = { lt: bounds.start };
-    else if (query.today === 'true' || query.today === true) where.remindAt = { lt: bounds.end };
+    else if (query.today === 'true' || query.today === true) where.remindAt = { gte: bounds.start, lt: bounds.end };
     const items = await this.prisma.reminder.findMany({
       where,
       include: { customer: { include: { stage: true, assignedEmployee: true } }, assignedUser: true },
@@ -69,27 +70,32 @@ export class RemindersService {
   }
 
   async ensureDueNotifications(user: any) {
-    const bounds = this.dayBounds();
-    const where: any = { status: 'PENDING' as any, remindAt: { lt: bounds.end }, assignedUserId: user.id };
+    this.ensureNotPartner(user);
+    const where: any = { status: 'PENDING' as any, remindAt: { lte: new Date() }, assignedUserId: user.id };
     const due = await this.prisma.reminder.findMany({ where, include: { customer: true } });
     for (const reminder of due) {
+      const overdue = new Date(reminder.remindAt).getTime() < Date.now();
+      const title = overdue ? 'Kechikkan eslatma' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? "Qo'ng'iroq vaqti" : 'Eslatma';
+      const customerName = reminder.customer?.name || reminder.title;
+      const message = `${customerName}\n${this.formatReminderDate(reminder.remindAt)}`;
       await this.prisma.notification.upsert({
         where: { reminderId: reminder.id },
-        update: { title: reminder.title, message: reminder.title },
+        update: { type: overdue ? 'reminder_overdue' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? 'follow_up' : 'reminder', title, message, entityType: 'customer', entityId: reminder.customerId },
         create: {
           userId: user.id,
           reminderId: reminder.id,
-          type: reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? 'follow_up' : 'reminder',
-          title: reminder.title,
-          message: reminder.title,
-          relatedEntityType: 'customer',
-          relatedEntityId: reminder.customerId,
+          type: overdue ? 'reminder_overdue' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? 'follow_up' : 'reminder',
+          title,
+          message,
+          entityType: 'customer',
+          entityId: reminder.customerId,
         },
       });
     }
   }
 
   async todayWork(user: any) {
+    this.ensureNotPartner(user);
     const bounds = this.dayBounds();
     const taskWhere: any = { dueDate: { not: null }, status: { in: ['TODO', 'IN_PROGRESS'] }, ...(this.canViewAll(user) ? {} : { assignedToId: user.id }) };
     const installationWhere: any = { scheduledDate: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED', 'DONE', 'INSTALLED'] }, ...(this.canViewAll(user) ? {} : { assignedEmployeeId: user.id }) };
@@ -121,7 +127,7 @@ export class RemindersService {
 
   private async ensureCustomerAccess(customerId: string, user: any) {
     const canViewAll = this.canViewAll(user);
-    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(user.role);
+    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(String(user.role || '').toUpperCase());
     const customer: any = await this.prisma.customer.findFirst({
       where: { id: customerId, deletedAt: null, ...(canViewAll ? {} : isPartner ? { groups: { some: { id: user.partnerGroupId } } } : { assignedEmployeeId: user.id }) },
       select: { id: true, name: true, assignedEmployeeId: true },
@@ -131,7 +137,13 @@ export class RemindersService {
   }
 
   private canViewAll(user: any) {
-    return ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user.role) || user.permissions?.includes('reminders.viewAll');
+    return ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(user?.role || '').toUpperCase()) || user.permissions?.includes('reminders.viewAll');
+  }
+
+  private ensureNotPartner(user: any) {
+    if (user?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(String(user.role).toUpperCase())) {
+      throw new ForbiddenException('Partner eslatmalarni ko\'ra olmaydi');
+    }
   }
 
   private async cancelNextContactReminders(customerId: string) {
@@ -167,5 +179,11 @@ export class RemindersService {
   private dayBounds() {
     const now = new Date();
     return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate()), end: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1) };
+  }
+
+  private formatReminderDate(value: Date | string) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return new Intl.DateTimeFormat('uz-UZ', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
   }
 }

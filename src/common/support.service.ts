@@ -44,8 +44,9 @@ export class SupportService {
   }
 
   async customerOptions(actor?: any) {
-    const partnerGroupId = actor?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(actor.role) ? actor.partnerGroupId : null;
-    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(actor?.role) || actor?.permissions?.includes('customers.viewAll');
+    const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase());
+    const partnerGroupId = actor?.partnerGroupId && !isAdmin ? actor.partnerGroupId : null;
+    const canViewAll = isAdmin || String(actor?.role || '').toUpperCase() === 'MANAGER' || actor?.permissions?.includes('customers.viewAll');
     const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, ...(canViewAll ? {} : partnerGroupId ? { groups: { some: { id: partnerGroupId } } } : { assignedEmployeeId: actor?.id }) } });
     const stages = await this.prisma.stage.findMany({ orderBy: { order: 'asc' } });
     const cities = new Set<string>();
@@ -340,7 +341,7 @@ export class SupportService {
   }
 
   async messages(customerId: string, actor?: any) {
-    if (actor?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(actor.role)) {
+    if (actor?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(String(actor.role || '').toUpperCase())) {
       throw new ForbiddenException('Partner ichki yozishmalarni ko\'ra olmaydi');
     }
     const items = await this.prisma.message.findMany({ where: { customerId }, orderBy: { createdAt: 'asc' } });

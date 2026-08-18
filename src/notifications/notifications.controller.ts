@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { Controller, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { NotificationsService } from './notifications.service';
@@ -9,26 +9,28 @@ type AuthRequest = Request & { user?: any };
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
 
-  @RequirePermissions('customers.view')
+  // Notifications contain task/reminder details and are not part of the
+  // partner-facing customer view.
+  @RequirePermissions('tasks.view')
   @Get()
   list(@Query() query: any, @Req() req: AuthRequest) {
     return this.notifications.list(query, req.user);
   }
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('tasks.view')
   @Get('unread-count')
   unreadCount(@Req() req: AuthRequest) {
     return this.notifications.unreadCount(req.user);
   }
 
-  @RequirePermissions('customers.view')
-  @Post(':id/read')
+  @RequirePermissions('tasks.view')
+  @Patch(':id/read')
   markRead(@Param('id') id: string, @Req() req: AuthRequest) {
     return this.notifications.markRead(id, req.user);
   }
 
-  @RequirePermissions('customers.view')
-  @Post('mark-all-read')
+  @RequirePermissions('tasks.view')
+  @Post('read-all')
   markAllRead(@Req() req: AuthRequest) {
     return this.notifications.markAllRead(req.user);
   }

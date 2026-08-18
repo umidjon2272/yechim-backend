@@ -2,6 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { DEFAULT_PIPELINE_NAME } from '../common/defaults';
+import { canViewAll, partnerGroupIdOf } from '../common/access';
 import { customerDto, uniqueConflict } from '../common/mappers';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
@@ -28,11 +29,14 @@ export class CustomersService {
     const { page, pageSize } = pagination(query);
     const search = String(query.search || '').trim().toLowerCase();
     const baseWhere: any = { deletedAt: null };
-    if (!this.canViewAll(actor)) baseWhere.assignedEmployeeId = actor?.id;
+    const partnerGroupId = this.partnerGroupId(actor);
+    // A partner is scoped by the assigned group, never by employee ownership.
+    // Applying both filters made group customers disappear unless they were
+    // also assigned to the partner account.
+    if (!this.canViewAll(actor) && !partnerGroupId) baseWhere.assignedEmployeeId = actor?.id;
     if (query.status) baseWhere.status = query.status;
     if (query.stage) baseWhere.stageId = query.stage;
     if (query.assignedEmployeeId && (this.canViewAll(actor) || query.assignedEmployeeId === actor?.id)) baseWhere.assignedEmployeeId = query.assignedEmployeeId;
-    const partnerGroupId = this.partnerGroupId(actor);
     if (partnerGroupId) baseWhere.groups = { some: { id: partnerGroupId } };
     else if (query.groupId) baseWhere.groups = { some: { id: query.groupId } };
     if (query.createdFrom || query.createdTo) {
@@ -59,7 +63,7 @@ export class CustomersService {
       return sort.startsWith('-') ? (av < bv ? 1 : -1) : av > bv ? 1 : -1;
     });
     const start = (page - 1) * pageSize;
-    return paged(customers.slice(start, start + pageSize).map((customer) => customerDto(customer, { partner: Boolean(partnerGroupId), partnerGroupId })), customers.length, page, pageSize);
+    return paged(customers.slice(start, start + pageSize).map((customer) => customerDto(customer, { partner: Boolean(partnerGroupId), partnerGroupId: partnerGroupId || undefined })), customers.length, page, pageSize);
   }
 
   async get(id: string, actor?: any) {
@@ -69,7 +73,7 @@ export class CustomersService {
       include: includeCustomer,
     });
     if (!customer) throw new NotFoundException('Mijoz topilmadi');
-    return customerDto(customer, { partner: Boolean(partnerGroupId), partnerGroupId });
+    return customerDto(customer, { partner: Boolean(partnerGroupId), partnerGroupId: partnerGroupId || undefined });
   }
 
   async create(body: any, actor?: any) {
@@ -77,6 +81,7 @@ export class CustomersService {
     const stageId = await this.resolveStageId(body.stageId ?? body.stage ?? 'NEW');
     const programs = this.normalizePrograms(body.programs);
     const scopedPartnerGroupId = this.partnerGroupId(actor);
+    const requestedGroupIds = scopedPartnerGroupId ? [scopedPartnerGroupId] : this.normalizeGroupIds(body.groupIds, body.groupId);
     try {
       const customer = await this.prisma.customer.create({
         data: {
@@ -109,9 +114,7 @@ export class CustomersService {
           stageEnteredAt: new Date(),
           installationAt: body.installationAt ? this.toDate(body.installationAt) : null,
           installerEmployeeId: body.installerEmployeeId || null,
-          groups: Array.isArray(scopedPartnerGroupId ? [scopedPartnerGroupId] : body.groupIds || (body.groupId ? [body.groupId] : undefined))
-            ? { connect: (scopedPartnerGroupId ? [scopedPartnerGroupId] : body.groupIds || [body.groupId]).map((id: string) => ({ id })) }
-            : undefined,
+          groups: requestedGroupIds.length > 0 ? { connect: requestedGroupIds.map((id) => ({ id })) } : undefined,
         },
         include: includeCustomer,
       });
@@ -163,6 +166,9 @@ export class CustomersService {
       nextContactAt: body.nextContactAt === undefined ? undefined : body.nextContactAt === null || body.nextContactAt === '' ? null : this.toDate(body.nextContactAt),
       installationAt: body.installationAt === undefined ? undefined : body.installationAt === null || body.installationAt === '' ? null : this.toDate(body.installationAt),
       installerEmployeeId: body.installerEmployeeId === undefined ? undefined : body.installerEmployeeId === '' ? null : body.installerEmployeeId,
+      groups: Array.isArray(body.groupIds) || body.groupId !== undefined
+        ? { set: this.normalizeGroupIds(body.groupIds, body.groupId).map((groupId) => ({ id: groupId })) }
+        : undefined,
     };
     Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
     try {
@@ -180,7 +186,7 @@ export class CustomersService {
       }
       if (body.installationAt !== undefined || body.installerEmployeeId !== undefined) await this.syncInstallation(customer, actor);
       if (stageChanged || body.stage || body.stageId) await this.syncPartnerReward(customer.id, new Date());
-      return customerDto(customer);
+      return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
       throw error;
@@ -190,7 +196,7 @@ export class CustomersService {
   async softDelete(id: string, actor?: any) {
     await this.get(id, actor);
     const customer = await this.prisma.customer.update({ where: { id }, data: { deletedAt: new Date(), status: 'inactive' }, include: includeCustomer });
-    return customerDto(customer);
+    return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
   }
 
   async deactivate(id: string, actor?: any) {
@@ -200,7 +206,7 @@ export class CustomersService {
       data: { status: current.status === 'active' ? 'inactive' : 'active' },
       include: includeCustomer,
     });
-    return customerDto(customer);
+    return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
   }
 
   async setStage(id: string, stage: string, body: any = {}, actor?: any) {
@@ -229,7 +235,7 @@ export class CustomersService {
     }
     if (body.installationAt !== undefined || body.installerEmployeeId !== undefined || stageId === 'INSTALLATION_REQUIRED') await this.syncInstallation(customer, actor);
     await this.syncPartnerReward(customer.id, new Date());
-    return customerDto(customer);
+    return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
   }
 
   async setGroups(id: string, groupIds: string[], actor?: any) {
@@ -293,7 +299,7 @@ export class CustomersService {
   }
 
   private canViewAll(actor?: any) {
-    return Boolean(actor && (['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(actor.role) || actor.permissions?.includes('customers.viewAll')));
+    return Boolean(actor && canViewAll(actor));
   }
 
   private ownershipWhere(actor?: any) {
@@ -424,8 +430,12 @@ export class CustomersService {
   }
 
   private partnerGroupId(actor?: any) {
-    if (!actor?.partnerGroupId || ['SUPER_ADMIN', 'ADMIN'].includes(actor.role)) return null;
-    return actor.partnerGroupId;
+    return partnerGroupIdOf(actor);
+  }
+
+  private normalizeGroupIds(groupIds: any, groupId?: any) {
+    const values = Array.isArray(groupIds) ? groupIds : groupId ? [groupId] : [];
+    return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
   }
 
   private async syncPartnerReward(customerId: string, completedAt: Date) {
@@ -435,7 +445,7 @@ export class CustomersService {
     await Promise.all(
       customer.groups.map((group) =>
         this.prisma.partnerReward.upsert({
-          where: { groupId_customerId_period: { groupId: group.id, customerId, period } },
+          where: { groupId_customerId: { groupId: group.id, customerId } },
           update: {},
           create: {
             groupId: group.id,

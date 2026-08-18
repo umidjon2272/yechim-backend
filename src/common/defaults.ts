@@ -22,6 +22,7 @@ export const ALL_PERMISSIONS = [
   'employees.edit',
   'employees.delete',
   'tasks.view',
+  'tasks.viewAll',
   'tasks.create',
   'tasks.edit',
   'tasks.delete',

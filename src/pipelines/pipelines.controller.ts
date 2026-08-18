@@ -18,19 +18,19 @@ export class PipelinesController {
     return this.pipelines.stages();
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('customers.edit')
   @Post('meta/customer-stages')
   createMetaStage(@Body() body: any) {
     return this.pipelines.createStage(body);
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('customers.edit')
   @Patch('meta/customer-stages/:id')
   updateMetaStage(@Param('id') id: string, @Body() body: any) {
     return this.pipelines.updateStage(id, body);
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('customers.edit')
   @Delete('meta/customer-stages/:id')
   deleteMetaStage(@Param('id') id: string, @Body() body: any) {
     return this.pipelines.deleteStage(id, body?.replacementStageId);
@@ -42,16 +42,16 @@ export class PipelinesController {
     return this.pipelines.createStage(body, pipelineId);
   }
 
-  @RequirePermissions('settings.edit')
-  @Patch('stages/:id')
-  updateStage(@Param('id') id: string, @Body() body: any) {
-    return this.pipelines.updateStage(id, body);
-  }
-
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('customers.edit')
   @Patch('stages/reorder')
   reorder(@Body() body: any) {
     return this.pipelines.reorder(body);
+  }
+
+  @RequirePermissions('customers.edit')
+  @Patch('stages/:id')
+  updateStage(@Param('id') id: string, @Body() body: any) {
+    return this.pipelines.updateStage(id, body);
   }
 
   @RequirePermissions('settings.edit')

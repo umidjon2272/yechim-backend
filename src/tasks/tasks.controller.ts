@@ -25,7 +25,7 @@ export class TasksController {
     return this.tasks.create(body, req.user);
   }
 
-  @RequirePermissions('tasks.view')
+  @RequirePermissions('tasks.edit')
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
     return this.tasks.update(id, body, req.user);

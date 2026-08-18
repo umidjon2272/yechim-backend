@@ -27,9 +27,10 @@ export class AuthController {
     return this.auth.refresh((req as any).cookies?.refreshToken, res);
   }
 
+  @Public()
   @Post('logout')
   logout(@Req() req: Request & { user?: any }, @Res({ passthrough: true }) res: Response) {
-    return this.auth.logout(req.user?.id, res);
+    return this.auth.logout(req.user?.id, (req as any).cookies?.refreshToken, res);
   }
 
   @Get('me')
@@ -39,6 +40,6 @@ export class AuthController {
 
   @Post('change-password')
   changePassword(@Req() req: Request & { user?: any }, @Body() dto: ChangePasswordDto) {
-    return this.auth.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+    return this.auth.changePassword(req.user.id, dto.currentPassword, dto.newPassword, req.user);
   }
 }

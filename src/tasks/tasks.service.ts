@@ -39,6 +39,9 @@ export class TasksService {
 
   async create(body: any, user: any) {
     const assignedToId = body.assignedToId || body.assignedEmployeeId || user.id;
+    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user.role) || user.permissions?.includes('tasks.viewAll');
+    if (!canViewAll && assignedToId !== user.id) throw new ForbiddenException('Vazifani faqat ozingizga biriktirishingiz mumkin');
+    if (body.customerId) await this.ensureCustomerAccess(body.customerId, user);
     const task = await this.prisma.task.create({
       data: {
         title: body.title,
@@ -54,9 +57,11 @@ export class TasksService {
         leadId: body.leadId || null,
         dealId: body.dealId || null,
         installationId: body.installationId || null,
+        automationKey: body.automationKey || null,
       } as any,
       include: { assignedTo: { include: { team: true } }, createdBy: { include: { team: true } }, customer: true, deal: true },
     });
+    if (task.customerId) await this.prisma.activity.create({ data: { customerId: task.customerId, type: 'TASK_CREATED', message: `Vazifa yaratildi: ${task.title}`, createdById: user.id, metadata: { taskId: task.id } } });
     return taskDto(task);
   }
 
@@ -67,6 +72,9 @@ export class TasksService {
     const ownStatusOnly = current.assignedToId === user.id && Object.keys(body).every((key) => key === 'status');
     if (!canEdit && !ownStatusOnly) throw new ForbiddenException('Bu vazifani tahrirlashga ruxsat yoq');
     const assignedToId = body.assignedToId || body.assignedEmployeeId;
+    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user.role) || user.permissions?.includes('tasks.viewAll');
+    if (!canViewAll && assignedToId && assignedToId !== user.id) throw new ForbiddenException('Vazifani boshqa xodimga biriktirishga ruxsat yo\'q');
+    if (body.customerId) await this.ensureCustomerAccess(body.customerId, user);
     const task = await this.prisma.task.update({
       where: { id },
       data: {
@@ -95,5 +103,11 @@ export class TasksService {
   private ensureCanSee(task: any, user: any) {
     const canViewAll = ['SUPER_ADMIN', 'ADMIN'].includes(user.role) || user.permissions?.includes('tasks.viewAll');
     if (!canViewAll && task.assignedToId !== user.id) throw new ForbiddenException('Bu vazifani korishga ruxsat yoq');
+  }
+
+  private async ensureCustomerAccess(customerId: string, user: any) {
+    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(user.role) || user.permissions?.includes('customers.viewAll');
+    const customer = await this.prisma.customer.findFirst({ where: { id: customerId, deletedAt: null, ...(canViewAll ? {} : { assignedEmployeeId: user.id }) }, select: { id: true } });
+    if (!customer) throw new ForbiddenException('Bu mijoz uchun vazifa yaratishga ruxsat yo\'q');
   }
 }

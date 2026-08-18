@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { ALL_PERMISSIONS } from '../src/common/defaults';
 
 const prisma = new PrismaClient();
 
@@ -12,50 +13,7 @@ const DEFAULT_STAGES = [
   { id: 'DEPOSIT_RECEIVED', label: 'Zaklad olingan' },
   { id: 'PAID', label: "To'lov qilindi" },
   { id: 'INSTALLATION_REQUIRED', label: "O'rnatish kerak" },
-  { id: 'INSTALLED', label: "O'rnatib bo'ldi" },
-];
-
-const ADMIN_PERMISSIONS = [
-  'dashboard.view',
-  'customers.view',
-  'customers.create',
-  'customers.edit',
-  'customers.delete',
-  'businesses.view',
-  'businesses.create',
-  'businesses.edit',
-  'leads.view',
-  'leads.create',
-  'leads.edit',
-  'leads.convert',
-  'deals.view',
-  'deals.create',
-  'deals.edit',
-  'deals.changeStage',
-  'payments.view',
-  'payments.create',
-  'tasks.view',
-  'tasks.create',
-  'tasks.edit',
-  'tasks.viewAll',
-  'activities.view',
-  'activities.create',
-  'installations.view',
-  'installations.create',
-  'installations.edit',
-  'employees.view',
-  'employees.create',
-  'employees.edit',
-  'teams.view',
-  'teams.create',
-  'teams.edit',
-  'settings.view',
-  'settings.edit',
-  'profit.view',
-  'reports.view',
-  'notifications.view',
-  'comments.create',
-  'attachments.create',
+  { id: 'INSTALLED', label: "O'rnatib bo'ldi", isFinal: true },
 ];
 
 async function main() {
@@ -79,7 +37,7 @@ async function main() {
         phone: '+998900000000',
         passwordHash: await bcrypt.hash(password, 12),
         role: 'ADMIN',
-        permissions: ADMIN_PERMISSIONS,
+        permissions: ALL_PERMISSIONS,
         teamId: team.id,
       },
     });
@@ -94,7 +52,7 @@ async function main() {
   for (const [index, stage] of DEFAULT_STAGES.entries()) {
     await prisma.stage.upsert({
       where: { id: stage.id },
-      update: { label: stage.label, order: index + 1, pipelineId: pipeline.id },
+      update: { label: stage.label, order: index + 1, pipelineId: pipeline.id, isFinal: Boolean(stage.isFinal) },
       create: { ...stage, order: index + 1, pipelineId: pipeline.id },
     });
   }

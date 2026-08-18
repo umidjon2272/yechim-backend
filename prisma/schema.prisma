@@ -33,32 +33,41 @@ enum TaskPriority {
 }
 
 model User {
-  id               String   @id @default(cuid())
+  id               String         @id @default(cuid())
   name             String
-  email            String?  @unique
-  username         String?  @unique
-  phone            String?  @unique
+  email            String?        @unique
+  username         String?        @unique
+  phone            String?        @unique
   passwordHash     String
-  role             Role     @default(EMPLOYEE)
-  permissions      String[] @default([])
-  status           String   @default("active")
+  role             Role           @default(EMPLOYEE)
+  permissions      String[]       @default([])
+  status           String         @default("active")
+  isActive         Boolean        @default(true)
   avatarUrl        String?
   refreshTokenHash String?
   teamId           String?
-  team             Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  team             Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  partnerGroupId   String?
+  partnerGroup     CustomerGroup? @relation("PartnerGroupUsers", fields: [partnerGroupId], references: [id], onDelete: SetNull)
 
-  assignedCustomers Customer[]     @relation("AssignedCustomers")
-  createdTasks      Task[]         @relation("CreatedTasks")
-  assignedTasks     Task[]         @relation("AssignedTasks")
-  deals             Deal[]         @relation("DealSeller")
-  installations     Installation[]
-  payments          Payment[]
+  assignedCustomers  Customer[]     @relation("AssignedCustomers")
+  installerCustomers Customer[]     @relation("CustomerInstallers")
+  createdTasks       Task[]         @relation("CreatedTasks")
+  assignedTasks      Task[]         @relation("AssignedTasks")
+  activities         Activity[]     @relation("CreatedActivities")
+  reminders          Reminder[]     @relation("AssignedReminders")
+  createdReminders   Reminder[]     @relation("CreatedReminders")
+  notifications      Notification[]
+  deals              Deal[]         @relation("DealSeller")
+  installations      Installation[]
+  payments           Payment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([role])
   @@index([status])
+  @@index([partnerGroupId])
 }
 
 model Team {
@@ -81,69 +90,104 @@ model Pipeline {
 }
 
 model Stage {
-  id         String   @id
+  id         String     @id
   label      String
   order      Int
+  isFinal    Boolean    @default(false)
   pipelineId String
-  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  pipeline   Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   customers  Customer[]
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
 
   @@index([pipelineId])
   @@index([pipelineId, order])
 }
 
 model Customer {
-  id                 String          @id @default(cuid())
-  name               String
-  firstName          String?
-  lastName           String?
-  phone              String?         @unique
-  phone2             String?
-  telegram           String?
-  email              String?         @unique
-  service            String?
-  amount             Decimal         @default(0)
-  notes              String?
-  note               String?
-  address            Json?
-  birthDate          String?
-  telegramUsername   String?
-  instagram          String?
-  source             String?
-  customFields       Json?
-  programs           Json?
-  status             String          @default("active")
-  pipelineId         String
-  pipeline           Pipeline        @relation(fields: [pipelineId], references: [id])
-  stageId            String
-  stage              Stage           @relation(fields: [stageId], references: [id])
-  assignedEmployeeId String?
-  assignedEmployee   User?           @relation("AssignedCustomers", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
-  groups             CustomerGroup[] @relation("CustomerGroups")
-  businesses         Business[]
-  leads              Lead[]
-  deals              Deal[]
-  tasks              Task[]
-  installations      Installation[]
-  deletedAt          DateTime?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  id                  String          @id @default(cuid())
+  name                String
+  firstName           String?
+  lastName            String?
+  phone               String?         @unique
+  phone2              String?
+  telegram            String?
+  email               String?         @unique
+  service             String?
+  amount              Decimal         @default(0)
+  depositAmount       Decimal?
+  notes               String?
+  note                String?
+  address             Json?
+  latitude            Float?
+  longitude           Float?
+  birthDate           String?
+  telegramUsername    String?
+  instagram           String?
+  source              String?
+  customFields        Json?
+  programs            Json?
+  status              String          @default("active")
+  pipelineId          String
+  pipeline            Pipeline        @relation(fields: [pipelineId], references: [id])
+  stageId             String
+  stage               Stage           @relation(fields: [stageId], references: [id])
+  assignedEmployeeId  String?
+  assignedEmployee    User?           @relation("AssignedCustomers", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  nextContactAt       DateTime?
+  lastContactAt       DateTime?
+  stageEnteredAt      DateTime        @default(now())
+  installationAt      DateTime?
+  installerEmployeeId String?
+  installerEmployee   User?           @relation("CustomerInstallers", fields: [installerEmployeeId], references: [id], onDelete: SetNull)
+  groups              CustomerGroup[] @relation("CustomerGroups")
+  partnerRewards      PartnerReward[]
+  businesses          Business[]
+  leads               Lead[]
+  deals               Deal[]
+  tasks               Task[]
+  installations       Installation[]
+  activities          Activity[]
+  reminders           Reminder[]
+  deletedAt           DateTime?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   @@index([stageId])
   @@index([pipelineId])
   @@index([assignedEmployeeId])
+  @@index([nextContactAt])
+  @@index([stageEnteredAt])
+  @@index([installerEmployeeId])
   @@index([status])
   @@index([deletedAt])
 }
 
 model CustomerGroup {
-  id        String     @id @default(cuid())
-  name      String     @unique
-  customers Customer[] @relation("CustomerGroups")
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  id                       String          @id @default(cuid())
+  name                     String          @unique
+  partnerRewardPerCustomer Decimal?
+  customers                Customer[]      @relation("CustomerGroups")
+  partnerUsers             User[]          @relation("PartnerGroupUsers")
+  partnerRewards           PartnerReward[]
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+}
+
+model PartnerReward {
+  id          String        @id @default(cuid())
+  groupId     String
+  customerId  String
+  period      String
+  amount      Decimal
+  completedAt DateTime      @default(now())
+  group       CustomerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  customer    Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([groupId, customerId, period])
+  @@index([groupId, period])
 }
 
 model CustomerFieldDef {
@@ -166,23 +210,23 @@ model ProgramCatalog {
 }
 
 model Business {
-  id                 String    @id @default(cuid())
+  id                 String         @id @default(cuid())
   name               String
   businessType       String?
   phone              String?
   email              String?
   address            String?
   city               String?
-  status             String    @default("active")
+  status             String         @default("active")
   notes              String?
   customerId         String?
-  customer           Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customer           Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
   assignedEmployeeId String?
   deals              Deal[]
   leads              Lead[]
   installations      Installation[]
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
 
   @@index([customerId])
   @@index([assignedEmployeeId])
@@ -320,9 +364,11 @@ model Task {
   dealId             String?
   deal               Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
   installationId     String?
+  automationKey      String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
+  @@unique([customerId, automationKey])
   @@index([assignedToId])
   @@index([createdById])
   @@index([customerId])
@@ -330,6 +376,65 @@ model Task {
   @@index([leadId])
   @@index([dealId])
   @@index([installationId])
+}
+
+enum ReminderStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model Activity {
+  id          String   @id @default(cuid())
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  type        String
+  message     String
+  metadata    Json?
+  createdById String?
+  createdBy   User?    @relation("CreatedActivities", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([type])
+}
+
+model Reminder {
+  id             String         @id @default(cuid())
+  customerId     String
+  customer       Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  assignedUserId String?
+  assignedUser   User?          @relation("AssignedReminders", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  createdById    String?
+  createdBy      User?          @relation("CreatedReminders", fields: [createdById], references: [id], onDelete: SetNull)
+  type           String         @default("CALL")
+  title          String
+  remindAt       DateTime
+  status         ReminderStatus @default(PENDING)
+  completedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  notification   Notification?
+
+  @@index([assignedUserId, status, remindAt])
+  @@index([customerId, status])
+}
+
+model Notification {
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminderId        String?   @unique
+  reminder          Reminder? @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+  type              String
+  title             String
+  message           String
+  read              Boolean   @default(false)
+  relatedEntityType String?
+  relatedEntityId   String?
+  createdAt         DateTime  @default(now())
+
+  @@index([userId, read, createdAt])
 }
 
 model Message {

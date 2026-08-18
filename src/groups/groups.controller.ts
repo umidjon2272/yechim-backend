@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { GroupsService } from './groups.service';
 
@@ -8,8 +9,14 @@ export class GroupsController {
 
   @RequirePermissions('customers.view')
   @Get()
-  list(@Query() query: any) {
-    return this.groups.list(query);
+  list(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.groups.list(query, req.user);
+  }
+
+  @RequirePermissions('customers.view')
+  @Get(':id/partner-summary')
+  partnerSummary(@Param('id') id: string, @Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.groups.partnerSummary(id, query, req.user);
   }
 
   @RequirePermissions('customers.create')

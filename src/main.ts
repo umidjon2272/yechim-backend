@@ -22,8 +22,14 @@ async function bootstrap() {
 
   app.setGlobalPrefix("api");
   app.use(cookieParser());
+  app.use((_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    next();
+  });
   app.enableCors({
-    origin: ["https://yechim-crm.vercel.app", "http://localhost:5173"],
+    origin: frontendOrigins,
     credentials: true,
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],

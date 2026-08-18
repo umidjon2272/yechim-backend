@@ -29,12 +29,16 @@ export class PermissionsGuard implements CanActivate {
       throw new UnauthorizedException('Sessiya muddati tugagan');
     }
 
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true } });
-    if (!user || user.status !== 'active') throw new UnauthorizedException('Foydalanuvchi faol emas');
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true, partnerGroup: true } });
+    if (!user || user.status !== 'active' || user.isActive === false) throw new UnauthorizedException('Foydalanuvchi faol emas');
     req.user = user;
 
     const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
     if (!required.length || ['SUPER_ADMIN', 'ADMIN'].includes(user.role)) return true;
+    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(user.role);
+    if (isPartner && required.some((permission) => permission !== 'customers.view')) {
+      throw new ForbiddenException('Partner faqat biriktirilgan guruh mijozlarini ko\'rishi mumkin');
+    }
     const own = user.permissions || [];
     if (required.every((permission) => own.includes(permission))) return true;
     throw new ForbiddenException('Bu amal uchun ruxsat yoq');

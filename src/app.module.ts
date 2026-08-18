@@ -14,6 +14,10 @@ import { StatisticsModule } from './statistics/statistics.module';
 import { TasksModule } from './tasks/tasks.module';
 import { UsersModule } from './users/users.module';
 import { CommonModule } from './common/common.module';
+import { ActivitiesModule } from './activities/activities.module';
+import { RemindersModule } from './reminders/reminders.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { InstallationsModule } from './installations/installations.module';
 
 @Module({
   imports: [
@@ -30,6 +34,10 @@ import { CommonModule } from './common/common.module';
     TasksModule,
     StatisticsModule,
     CommonModule,
+    ActivitiesModule,
+    RemindersModule,
+    NotificationsModule,
+    InstallationsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: PermissionsGuard }],
 })

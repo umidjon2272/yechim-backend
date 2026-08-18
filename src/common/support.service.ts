@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
 import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber } from './mappers';
 import { paged, pagination } from './pagination';
@@ -43,8 +43,10 @@ export class SupportService {
     return this.prisma.team.update({ where: { id }, data: { name: body.name, description: body.description, status: body.status } });
   }
 
-  async customerOptions() {
-    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null } });
+  async customerOptions(actor?: any) {
+    const partnerGroupId = actor?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(actor.role) ? actor.partnerGroupId : null;
+    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(actor?.role) || actor?.permissions?.includes('customers.viewAll');
+    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, ...(canViewAll ? {} : partnerGroupId ? { groups: { some: { id: partnerGroupId } } } : { assignedEmployeeId: actor?.id }) } });
     const stages = await this.prisma.stage.findMany({ orderBy: { order: 'asc' } });
     const cities = new Set<string>();
     const programs = new Set<string>();
@@ -52,10 +54,16 @@ export class SupportService {
     customers.forEach((c) => {
       const city = (c.address as any)?.city;
       if (city) cities.add(city);
+      if (c.service) programs.add(c.service);
       if (Array.isArray(c.programs)) c.programs.forEach((p: any) => p.name && programs.add(p.name));
       stageCounts[c.stageId] = (stageCounts[c.stageId] || 0) + 1;
     });
-    return { cities: [...cities], programs: [...programs], stageCounts, stages: stages.map((s) => ({ id: s.id, label: s.label })) };
+    return {
+      cities: partnerGroupId ? [] : [...cities],
+      programs: partnerGroupId ? [] : [...programs],
+      stageCounts,
+      stages: stages.map((s) => ({ id: s.id, label: s.label })),
+    };
   }
 
   async fieldDefs(query: any) {
@@ -331,7 +339,10 @@ export class SupportService {
     return this.prisma.installation.update({ where: { id }, data: body, include: { customer: true, business: true, deal: true, assignedEmployee: { include: { team: true } } } }).then(installationDto);
   }
 
-  async messages(customerId: string) {
+  async messages(customerId: string, actor?: any) {
+    if (actor?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(actor.role)) {
+      throw new ForbiddenException('Partner ichki yozishmalarni ko\'ra olmaydi');
+    }
     const items = await this.prisma.message.findMany({ where: { customerId }, orderBy: { createdAt: 'asc' } });
     return { items, total: items.length };
   }

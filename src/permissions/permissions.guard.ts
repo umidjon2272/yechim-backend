@@ -6,7 +6,7 @@ import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 import { isAdmin, isPartner } from '../common/access';
 import { IS_PUBLIC_KEY } from './public.decorator';
-import { PERMISSIONS_KEY } from './permissions.decorator';
+import { ANY_PERMISSIONS_KEY, PERMISSIONS_KEY } from './permissions.decorator';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -49,12 +49,14 @@ export class PermissionsGuard implements CanActivate {
     req.user = user;
 
     const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
-    if (!required.length || isAdmin(user)) return true;
-    if (isPartner(user) && required.some((permission) => permission !== 'customers.view')) {
+    const anyRequired = this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
+    if ((!required.length && !anyRequired.length) || isAdmin(user)) return true;
+    if (isPartner(user) && (required.some((permission) => permission !== 'customers.view') || anyRequired.some((permission) => permission !== 'customers.view'))) {
       throw new ForbiddenException('Partner faqat biriktirilgan guruh mijozlarini ko\'rishi mumkin');
     }
     const own = user.permissions || [];
-    if (required.every((permission) => own.includes(permission))) return true;
+    if (required.every((permission) => own.includes(permission)) && anyRequired.every((permission) => own.includes(permission))) return true;
+    if (anyRequired.length && anyRequired.some((permission) => own.includes(permission)) && required.every((permission) => own.includes(permission))) return true;
     throw new ForbiddenException('Bu amal uchun ruxsat yoq');
   }
 

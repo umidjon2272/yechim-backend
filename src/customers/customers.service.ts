@@ -11,6 +11,8 @@ const includeCustomer = {
   assignedEmployee: { include: { team: true } },
   installerEmployee: { include: { team: true } },
   groups: true,
+  partnerRewards: true,
+  currency: true,
   businesses: true,
   stage: true,
   activities: {
@@ -63,7 +65,7 @@ export class CustomersService {
       return sort.startsWith('-') ? (av < bv ? 1 : -1) : av > bv ? 1 : -1;
     });
     const start = (page - 1) * pageSize;
-    return paged(customers.slice(start, start + pageSize).map((customer) => customerDto(customer, { partner: Boolean(partnerGroupId), partnerGroupId: partnerGroupId || undefined })), customers.length, page, pageSize);
+    return paged(customers.slice(start, start + pageSize).map((customer) => this.dto(customer, actor)), customers.length, page, pageSize);
   }
 
   async get(id: string, actor?: any) {
@@ -73,7 +75,7 @@ export class CustomersService {
       include: includeCustomer,
     });
     if (!customer) throw new NotFoundException('Mijoz topilmadi');
-    return customerDto(customer, { partner: Boolean(partnerGroupId), partnerGroupId: partnerGroupId || undefined });
+    return this.dto(customer, actor);
   }
 
   async create(body: any, actor?: any) {
@@ -82,6 +84,7 @@ export class CustomersService {
     const programs = this.normalizePrograms(body.programs);
     const scopedPartnerGroupId = this.partnerGroupId(actor);
     const requestedGroupIds = scopedPartnerGroupId ? [scopedPartnerGroupId] : this.normalizeGroupIds(body.groupIds, body.groupId);
+    const currencyId = await this.resolveCurrencyId(body.currencyId, body.currencyCode);
     try {
       const customer = await this.prisma.customer.create({
         data: {
@@ -95,6 +98,7 @@ export class CustomersService {
           service: body.service || programs[0]?.name || null,
           amount: this.optionalNumber(body.amount) ?? 0,
           depositAmount: this.optionalNumber(body.depositAmount),
+          currencyId,
           notes: body.notes || body.note || null,
           note: body.note || body.notes || null,
           address: body.address === undefined || body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -120,9 +124,9 @@ export class CustomersService {
       });
       await this.createActivity(customer.id, 'CUSTOMER_CREATED', 'Mijoz yaratildi', actor?.id);
       await this.createStageAutomation(customer, stageId, actor);
-      if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL');
+      if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL', body.reminderNote ?? body.note ?? body.comment);
       await this.syncPartnerReward(customer.id, new Date());
-      return customerDto(customer, { partner: Boolean(scopedPartnerGroupId), partnerGroupId: scopedPartnerGroupId || undefined });
+      return this.dto(customer, actor);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
       throw error;
@@ -148,6 +152,7 @@ export class CustomersService {
       service: body.service,
       amount: body.amount == null ? undefined : this.optionalNumber(body.amount) ?? 0,
       depositAmount: body.depositAmount === undefined ? undefined : body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount),
+      currencyId: body.currencyId !== undefined || body.currencyCode !== undefined ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : undefined,
       notes: body.notes ?? body.note,
       note: body.note ?? body.notes,
       address: body.address === undefined ? undefined : body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -178,15 +183,16 @@ export class CustomersService {
         await this.createStageAutomation(customer, customer.stageId, actor);
       }
       if (current.assignedEmployeeId !== customer.assignedEmployeeId) await this.createActivity(customer.id, 'ASSIGNED_CHANGED', `Mas'ul xodim o'zgardi`, actor?.id);
+      if (Array.isArray(body.groupIds) || body.groupId !== undefined) await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
       if (body.amount !== undefined && Number(current.amount) !== Number(customer.amount)) await this.createActivity(customer.id, 'AMOUNT_CHANGED', `Summa o'zgardi: ${customer.amount}`, actor?.id);
       if (body.depositAmount !== undefined && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
       if (body.nextContactAt !== undefined) {
-        if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL');
+        if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL', body.reminderNote ?? body.note ?? body.comment);
         else await this.cancelPendingReminders(customer.id);
       }
       if (body.installationAt !== undefined || body.installerEmployeeId !== undefined) await this.syncInstallation(customer, actor);
       if (stageChanged || body.stage || body.stageId) await this.syncPartnerReward(customer.id, new Date());
-      return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
+      return this.dto(customer, actor);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
       throw error;
@@ -196,7 +202,7 @@ export class CustomersService {
   async softDelete(id: string, actor?: any) {
     await this.get(id, actor);
     const customer = await this.prisma.customer.update({ where: { id }, data: { deletedAt: new Date(), status: 'inactive' }, include: includeCustomer });
-    return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
+    return this.dto(customer, actor);
   }
 
   async deactivate(id: string, actor?: any) {
@@ -206,7 +212,7 @@ export class CustomersService {
       data: { status: current.status === 'active' ? 'inactive' : 'active' },
       include: includeCustomer,
     });
-    return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
+    return this.dto(customer, actor);
   }
 
   async setStage(id: string, stage: string, body: any = {}, actor?: any) {
@@ -230,23 +236,25 @@ export class CustomersService {
     }
     if (body.depositAmount !== undefined && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
     if (body.nextContactAt !== undefined) {
-      if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || (stageId === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'CALL'));
+        if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || (stageId === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'CALL'), body.reminderNote ?? body.note ?? body.comment);
       else await this.cancelPendingReminders(customer.id);
     }
     if (body.installationAt !== undefined || body.installerEmployeeId !== undefined || stageId === 'INSTALLATION_REQUIRED') await this.syncInstallation(customer, actor);
     await this.syncPartnerReward(customer.id, new Date());
-    return customerDto(customer, { partner: Boolean(this.partnerGroupId(actor)), partnerGroupId: this.partnerGroupId(actor) || undefined });
+    return this.dto(customer, actor);
   }
 
   async setGroups(id: string, groupIds: string[], actor?: any) {
+    if (this.partnerGroupId(actor)) throw new ForbiddenException('Partner mijoz guruhini o\'zgartira olmaydi');
     await this.get(id, actor);
     const customer = await this.prisma.customer.update({
       where: { id },
       data: { groups: { set: groupIds.map((groupId) => ({ id: groupId })) } },
       include: includeCustomer,
     });
+    await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
     await this.syncPartnerReward(customer.id, new Date());
-    return customerDto(customer);
+    return this.dto(customer, actor);
   }
 
   async bulkMove(body: any, actor?: any) {
@@ -302,6 +310,19 @@ export class CustomersService {
     return Boolean(actor && canViewAll(actor));
   }
 
+  private dto(customer: any, actor?: any) {
+    const partnerGroupId = this.partnerGroupId(actor);
+    return customerDto(customer, {
+      partner: Boolean(partnerGroupId),
+      partnerGroupId: partnerGroupId || undefined,
+      hideInternalNotes: !this.canViewComments(actor),
+    });
+  }
+
+  private canViewComments(actor?: any) {
+    return Boolean(actor && (['ADMIN', 'SUPER_ADMIN'].includes(String(actor.role || '').toUpperCase()) || actor.permissions?.includes('comments.view')));
+  }
+
   private ownershipWhere(actor?: any) {
     if (!actor || this.canViewAll(actor) || this.partnerGroupId(actor)) return {};
     return { assignedEmployeeId: actor.id };
@@ -331,6 +352,19 @@ export class CustomersService {
 
   private async createActivity(customerId: string, type: string, message: string, createdById?: string, metadata?: any) {
     return this.prisma.activity.create({ data: { customerId, type, message, createdById: createdById || null, metadata: metadata || undefined } });
+  }
+
+  private async resolveCurrencyId(currencyId?: any, currencyCode?: any) {
+    if (!this.prisma.currency) return null;
+    const requested = String(currencyId || '').trim();
+    const code = String(currencyCode || '').trim().toUpperCase();
+    const item = requested
+      ? await this.prisma.currency.findFirst({ where: { id: requested, isActive: true }, select: { id: true } })
+      : code
+        ? await this.prisma.currency.findFirst({ where: { code, isActive: true }, select: { id: true } })
+        : await this.prisma.currency.findFirst({ where: { isDefault: true, isActive: true }, select: { id: true } });
+    if (!item) throw new ConflictException('Faol valyuta topilmadi');
+    return item.id;
   }
 
   private async createStageAutomation(customer: any, stageId: string, actor?: any) {
@@ -368,15 +402,16 @@ export class CustomersService {
     await this.prisma.reminder.updateMany({ where: { customerId, status: 'PENDING' as any, type: { in: ['CALL', 'FOLLOW_UP'] } }, data: { status: 'CANCELLED' as any } });
   }
 
-  private async scheduleReminder(customer: any, remindAt: Date, actor?: any, type = 'CALL') {
+  private async scheduleReminder(customer: any, remindAt: Date, actor?: any, type = 'CALL', note?: any) {
     const assignedUserId = customer.assignedEmployeeId || actor?.id || null;
     if (!assignedUserId) return;
     await this.cancelPendingReminders(customer.id);
     const title = type === 'REPEAT_SALE' ? `${customer.name} uchun qayta sotuv eslatmasi` : `${customer.name}ga qo'ng'iroq qilish`;
+    const normalizedNote = String(note || '').trim() || null;
     const reminder = await this.prisma.reminder.create({
-      data: { customerId: customer.id, assignedUserId, createdById: actor?.id || null, type, title, remindAt },
+      data: { customerId: customer.id, assignedUserId, createdById: actor?.id || null, type, title, note: normalizedNote, remindAt },
     });
-    await this.createActivity(customer.id, 'REMINDER_CREATED', `Eslatma rejalashtirildi: ${remindAt.toISOString()}`, actor?.id, { reminderId: reminder.id, type });
+    await this.createActivity(customer.id, 'REMINDER_CREATED', `Eslatma rejalashtirildi: ${remindAt.toISOString()}${normalizedNote ? `\nIzoh: ${normalizedNote}` : ''}`, actor?.id, { reminderId: reminder.id, type, note: normalizedNote });
     return reminder;
   }
 

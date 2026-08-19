@@ -5,6 +5,7 @@ import { ActivitiesService } from '../src/activities/activities.service';
 import { RemindersService } from '../src/reminders/reminders.service';
 import { CustomersService } from '../src/customers/customers.service';
 import { EmployeesService } from '../src/employees/employees.service';
+import { UsersService } from '../src/users/users.service';
 import { GroupsService } from '../src/groups/groups.service';
 import { NotificationsService } from '../src/notifications/notifications.service';
 import { TasksService } from '../src/tasks/tasks.service';
@@ -60,7 +61,7 @@ const partnerCustomer: any = customerDto(
 );
 assert.deepEqual(
   Object.keys(partnerCustomer).sort(),
-  ['id', 'name', 'phone', 'stage', 'stageId', 'stageLabel', 'isCompleted', 'isInstalled'].sort(),
+  ['id', 'name', 'phone', 'stage', 'stageId', 'stageLabel', 'isCompleted', 'isInstalled', 'rewardAmount'].sort(),
   'partner response is minimal',
 );
 assert.equal(partnerCustomer.isInstalled, true, 'partner installation status');
@@ -68,8 +69,12 @@ assert.equal('amount' in partnerCustomer, false, 'partner cannot see sales amoun
 assert.equal('assignedEmployee' in partnerCustomer, false, 'partner cannot see assignee');
 
 const employeeService = new EmployeesService({} as any);
-await assert.rejects(() => employeeService.create({ name: 'Xodim', phone: '901234567', username: 'xodim', password: 'secret1' }), /Telefon raqami/);
-await assert.rejects(() => employeeService.create({ name: 'Xodim', phone: '+998901234567', username: 'x', password: 'secret1' }), /Login kamida/);
+const adminActor = { id: 'admin-1', role: 'ADMIN' };
+await assert.rejects(() => employeeService.create({ name: 'Xodim', phone: '901234567', username: 'xodim', password: 'secret1' }, adminActor), /Telefon raqami/);
+await assert.rejects(() => employeeService.create({ name: 'Xodim', phone: '+998901234567', username: 'x', password: 'secret1' }, adminActor), /Login kamida/);
+await assert.rejects(() => employeeService.create({ name: 'Xodim', phone: '+998901234567', username: 'xodim', password: 'secret1' }, { id: 'employee-1', role: 'EMPLOYEE' }), /faqat admin/);
+await assert.rejects(() => employeeService.updateCredentials('employee-1', { username: 'new-login' }, { id: 'employee-1', role: 'EMPLOYEE' }), /faqat admin/);
+await assert.rejects(() => new UsersService({} as any).updateMyLogin({ id: 'employee-1', role: 'EMPLOYEE' }, 'new-login'), /faqat admin/);
 
 const stageService = new CustomersService({
   stage: {
@@ -140,13 +145,14 @@ const reminderPrisma: any = {
   installation: { findMany: async () => [] },
 };
 const reminderService = new RemindersService(reminderPrisma);
-await reminderService.create({ customerId: 'customer-1', remindAt: todayAtThree.toISOString(), type: 'CALL' }, { id: 'employee-1', role: 'EMPLOYEE', permissions: [] });
+const reminderActor = { id: 'employee-1', role: 'EMPLOYEE', permissions: ['calls.create', 'calls.view'] };
+await reminderService.create({ customerId: 'customer-1', remindAt: todayAtThree.toISOString(), type: 'CALL' }, reminderActor);
 assert.equal(reminderCreatePayload.customerId, 'customer-1', 'reminder customer link');
 assert.equal(reminderCreatePayload.assignedUserId, 'employee-1', 'reminder ownership');
 assert.equal(customerUpdatePayload.nextContactAt.getTime(), todayAtThree.getTime(), 'nextContactAt persisted');
 assert.equal(activityPayload.type, 'REMINDER_CREATED', 'reminder timeline activity');
 
-const completed = await reminderService.complete('reminder-1', { id: 'employee-1', role: 'EMPLOYEE', permissions: [] });
+const completed = await reminderService.complete('reminder-1', reminderActor);
 assert.equal(completed.status, 'COMPLETED', 'reminder completion status');
 assert.equal(customerUpdatePayload.nextContactAt, null, 'completed reminder clears next contact');
 assert.ok(customerUpdatePayload.lastContactAt, 'completed reminder sets last contact');
@@ -251,7 +257,7 @@ const activityPrisma: any = {
   },
 };
 const activities = new ActivitiesService(activityPrisma);
-await activities.create({ customerId: 'customer-1', type: 'NOTE', title: 'Izoh', description: 'Narxni kelishadi' }, { id: 'employee-1', role: 'EMPLOYEE', permissions: [] });
+await activities.create({ customerId: 'customer-1', type: 'NOTE', title: 'Izoh', description: 'Narxni kelishadi' }, { id: 'employee-1', role: 'EMPLOYEE', permissions: ['comments.create'] });
 assert.equal(activityCreatePayload.type, 'NOTE', 'note activity type');
 assert.equal(activityCreatePayload.message, 'Izoh: Narxni kelishadi', 'note timeline message');
 
@@ -259,10 +265,12 @@ const schema = readFileSync('prisma/schema.prisma', 'utf8');
 const migration = readFileSync('prisma/migrations/20260818150000_reminders_timeline_automation/migration.sql', 'utf8');
 const rewardMigration = readFileSync('prisma/migrations/20260818190000_partner_reward_once_per_customer/migration.sql', 'utf8');
 const notificationMigration = readFileSync('prisma/migrations/20260818200000_notification_contract/migration.sql', 'utf8');
-for (const marker of ['nextContactAt', 'stageEnteredAt', 'installationAt', 'installerEmployeeId', 'model Activity', 'model Reminder', 'model Notification', '@@unique([groupId, customerId])', 'isRead', 'readAt']) assert.ok(schema.includes(marker), `schema marker ${marker}`);
+const permissionCurrencyMigration = readFileSync('prisma/migrations/20260819100000_permissions_currency_comments/migration.sql', 'utf8');
+for (const marker of ['nextContactAt', 'stageEnteredAt', 'installationAt', 'installerEmployeeId', 'model Activity', 'model Reminder', 'model Currency', 'currencyId', 'note', 'model Notification', '@@unique([groupId, customerId])', 'isRead', 'readAt']) assert.ok(schema.includes(marker), `schema marker ${marker}`);
 for (const marker of ['CREATE TABLE "Activity"', 'CREATE TABLE "Reminder"', 'CREATE TABLE "Notification"', 'automationKey']) assert.ok(migration.includes(marker), `migration marker ${marker}`);
 for (const marker of ['DROP INDEX "PartnerReward_groupId_customerId_period_key"', 'PartnerReward_groupId_customerId_key']) assert.ok(rewardMigration.includes(marker), `reward migration marker ${marker}`);
 for (const marker of ['RENAME COLUMN "read" TO "isRead"', 'ADD COLUMN "readAt"', 'Notification_userId_isRead_createdAt_idx']) assert.ok(notificationMigration.includes(marker), `notification migration marker ${marker}`);
+for (const marker of ['CREATE TABLE "Currency"', 'ADD COLUMN "currencyId"', 'ADD COLUMN "note"', 'currency-uzs']) assert.ok(permissionCurrencyMigration.includes(marker), `permission/currency migration marker ${marker}`);
 
   console.log('CRM feature smoke tests passed: admin/partner scope, group assignment, reward, tasks, notifications, reminders, activities, schema/migrations');
 }

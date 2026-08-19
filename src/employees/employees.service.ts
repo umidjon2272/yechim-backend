@@ -28,7 +28,8 @@ export class EmployeesService {
     return publicUser(user);
   }
 
-  async create(body: any) {
+  async create(body: any, actor?: any) {
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase())) throw new ForbiddenException('Xodimni faqat admin yaratishi mumkin');
     const name = String(body.name || '').trim();
     const phone = String(body.phone || '').trim();
     const username = String(body.username || '').trim();
@@ -55,7 +56,8 @@ export class EmployeesService {
         } as any,
         include: { team: true, partnerGroup: true },
       });
-      return publicUser(user);
+      const loginUrl = `${String(process.env.FRONTEND_URL || 'https://yechim-crm.vercel.app').split(',')[0].trim().replace(/\/$/, '')}/login`;
+      return { employee: publicUser(user), credentials: { login: username, password }, loginUrl };
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException(this.uniqueMessage(error));
       throw error;
@@ -65,6 +67,9 @@ export class EmployeesService {
   async update(id: string, body: any, actor?: any) {
     const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase());
     if (!isAdmin && actor?.id !== id) throw new ForbiddenException('Faqat admin boshqa xodimlarni boshqarishi mumkin');
+    if (!isAdmin && (body.username !== undefined || body.password !== undefined || body.newPassword !== undefined)) {
+      throw new ForbiddenException('Xodim login yoki parolini o\'zgartira olmaydi');
+    }
     try {
       const data: any = isAdmin
         ? {
@@ -90,6 +95,7 @@ export class EmployeesService {
       if (data.permissions) data.permissions = this.sanitizePermissions(data.permissions);
       if (data.role !== undefined && !['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES', 'SUPPORT', 'INSTALLER', 'DEVELOPER', 'EMPLOYEE'].includes(String(data.role).toUpperCase())) delete data.role;
       const user = await this.prisma.user.update({ where: { id }, data, include: { team: true, partnerGroup: true } });
+      if (data.username !== undefined) await this.revokeSessions(id);
       if (data.status === 'inactive' || data.isActive === false) await this.revokeSessions(id);
       return publicUser(user);
     } catch (error) {
@@ -110,15 +116,31 @@ export class EmployeesService {
   }
 
   async resetPassword(id: string, password: string, actor?: any) {
-    if (!['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase())) throw new ForbiddenException('Parolni faqat admin almashtiradi');
-    if (!password || String(password).length < 6) throw new ConflictException('Parol kamida 6 belgidan iborat bo\'lishi kerak');
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: { passwordHash: await bcrypt.hash(password, 12) },
-      include: { team: true, partnerGroup: true },
-    });
-    await this.revokeSessions(id);
-    return publicUser(user);
+    return this.updateCredentials(id, { newPassword: password }, actor);
+  }
+
+  async updateCredentials(id: string, body: any, actor?: any) {
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase())) throw new ForbiddenException('Xodim login/parolini faqat admin boshqaradi');
+    const username = body.username === undefined ? undefined : String(body.username || '').trim();
+    const password = body.newPassword ?? body.password;
+    if (username !== undefined && !/^[a-zA-Z0-9._-]{3,}$/.test(username)) throw new BadRequestException('Login kamida 3 belgi va faqat lotin harflari, raqam, nuqta, tire yoki pastki chiziqdan iborat bo\'lishi kerak');
+    if (password !== undefined && String(password).length < 6) throw new ConflictException('Parol kamida 6 belgidan iborat bo\'lishi kerak');
+    if (username === undefined && password === undefined) throw new BadRequestException('Login yoki yangi parol kiritilishi shart');
+    try {
+      const user = await this.prisma.user.update({
+        where: { id },
+        data: {
+          ...(username !== undefined ? { username } : {}),
+          ...(password !== undefined ? { passwordHash: await bcrypt.hash(String(password), 12) } : {}),
+        },
+        include: { team: true, partnerGroup: true },
+      });
+      await this.revokeSessions(id);
+      return publicUser(user);
+    } catch (error) {
+      if (uniqueConflict(error)) throw new ConflictException(this.uniqueMessage(error));
+      throw error;
+    }
   }
 
   async remove(id: string, actor?: any) {

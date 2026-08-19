@@ -33,7 +33,7 @@ export function publicUser(user: any) {
   };
 }
 
-export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string } = {}) {
+export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean } = {}) {
   if (!customer) return null;
   const now = Date.now();
   const stageEnteredAt = customer.stageEnteredAt || customer.updatedAt || customer.createdAt;
@@ -55,6 +55,7 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
       stageLabel: customer.stage?.label || customer.stageId,
       isCompleted: Boolean(customer.stage?.isFinal),
       isInstalled: Boolean(customer.stage?.isFinal),
+      rewardAmount: (customer.partnerRewards || []).reduce((sum: number, reward: any) => sum + toNumber(reward.amount), 0),
     };
   }
   return {
@@ -69,8 +70,10 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     service: customer.service,
     amount: toNumber(customer.amount),
     depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount),
-    notes: customer.notes,
-    note: customer.note,
+    currencyId: customer.currencyId || customer.currency?.id || null,
+    currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null,
+    notes: options.hideInternalNotes ? null : customer.notes,
+    note: options.hideInternalNotes ? null : customer.note,
     address: customer.address ?? null,
     latitude: customer.latitude,
     longitude: customer.longitude,
@@ -98,7 +101,7 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     installationAt: customer.installationAt || null,
     installerEmployeeId: customer.installerEmployeeId || null,
     installerEmployee: publicUser(customer.installerEmployee),
-    latestNote: latestNote ? { id: latestNote.id, message: latestNote.message, createdAt: latestNote.createdAt, createdBy: publicUser(latestNote.createdBy) } : null,
+    latestNote: options.hideInternalNotes ? null : latestNote ? { id: latestNote.id, message: latestNote.message, createdAt: latestNote.createdAt, createdBy: publicUser(latestNote.createdBy) } : null,
     groupIds: groups.map((g: any) => g.id),
     groups,
     business: customer.businesses?.[0] ? businessDto(customer.businesses[0]) : null,

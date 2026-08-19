@@ -22,8 +22,8 @@ export class EmployeesController {
 
   @RequirePermissions('employees.create')
   @Post()
-  create(@Body() dto: CreateEmployeeDto) {
-    return this.employees.create(dto);
+  create(@Body() dto: CreateEmployeeDto, @Req() req: Request & { user?: any }) {
+    return this.employees.create(dto, req.user);
   }
 
   @RequirePermissions('employees.edit')
@@ -48,6 +48,12 @@ export class EmployeesController {
   @Post(':id/password-reset')
   resetPassword(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
     return this.employees.resetPassword(id, body.password, req.user);
+  }
+
+  @RequirePermissions('employees.edit')
+  @Patch(':id/credentials')
+  updateCredentials(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.employees.updateCredentials(id, body, req.user);
   }
 
   @RequirePermissions('employees.delete')

@@ -48,7 +48,7 @@ export class TasksService {
     const task = await this.prisma.task.create({
       data: {
         title: body.title,
-        description: body.description || null,
+        description: body.description ?? body.comment ?? body.note ?? null,
         status: this.normalizeStatus(body.status || 'TODO'),
         priority: body.priority || 'MEDIUM',
         dueDate: body.dueDate || null,
@@ -64,7 +64,10 @@ export class TasksService {
       } as any,
       include: { assignedTo: { include: { team: true } }, createdBy: { include: { team: true } }, customer: true, deal: true },
     });
-    if (task.customerId) await this.prisma.activity.create({ data: { customerId: task.customerId, type: 'TASK_CREATED', message: `Vazifa yaratildi: ${task.title}`, createdById: user.id, metadata: { taskId: task.id } } });
+    if (task.customerId) {
+      const comment = task.description ? `\nIzoh: ${task.description}` : '';
+      await this.prisma.activity.create({ data: { customerId: task.customerId, type: 'TASK_CREATED', message: `Vazifa yaratildi: ${task.title}${comment}`, createdById: user.id, metadata: { taskId: task.id, description: task.description || null } } });
+    }
     if (task.assignedToId && task.assignedToId !== user.id) await this.notifyAssignee(task.assignedToId, task.title, task.id, task.dueDate);
     return taskDto(task);
   }
@@ -92,7 +95,7 @@ export class TasksService {
       where: { id },
       data: {
         title: body.title,
-        description: body.description,
+        description: body.description ?? body.comment ?? body.note,
         status: nextStatus,
         priority: body.priority,
         dueDate: body.dueDate,
@@ -106,6 +109,9 @@ export class TasksService {
       } as any,
       include: { assignedTo: { include: { team: true } }, createdBy: { include: { team: true } }, customer: true, deal: true },
     });
+    if (task.customerId && (body.description !== undefined || body.comment !== undefined || body.note !== undefined)) {
+      await this.prisma.activity.create({ data: { customerId: task.customerId, type: 'TASK_UPDATED', message: `Vazifa izohi yangilandi: ${task.title}${task.description ? `\nIzoh: ${task.description}` : ''}`, createdById: user.id, metadata: { taskId: task.id, description: task.description || null } } });
+    }
     if (task.assignedToId && task.assignedToId !== current.assignedToId && task.assignedToId !== user.id) {
       await this.notifyAssignee(task.assignedToId, task.title, task.id, task.dueDate);
     }

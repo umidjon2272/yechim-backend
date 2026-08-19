@@ -8,6 +8,11 @@ export class RemindersService {
   async list(query: any, user: any) {
     this.ensureNotPartner(user);
     const where: any = { status: 'PENDING' as any };
+    const isAdmin = this.canViewAll(user) && ['ADMIN', 'SUPER_ADMIN'].includes(String(user?.role || '').toUpperCase());
+    const canViewCalls = isAdmin || user.permissions?.includes('calls.view');
+    const canViewReminders = isAdmin || user.permissions?.includes('reminders.view');
+    if (!isAdmin && canViewCalls && !canViewReminders) where.type = { in: ['CALL', 'FOLLOW_UP'] };
+    if (!isAdmin && !canViewCalls && canViewReminders) where.type = { notIn: ['CALL', 'FOLLOW_UP'] };
     if (!this.canViewAll(user)) where.assignedUserId = user.id;
     if (query.customerId) {
       await this.ensureCustomerAccess(query.customerId, user);
@@ -26,6 +31,9 @@ export class RemindersService {
   }
 
   async create(body: any, user: any) {
+    const type = body.type || 'CALL';
+    if (['CALL', 'FOLLOW_UP'].includes(type)) this.ensurePermission(user, 'calls.create');
+    else this.ensurePermission(user, 'reminders.create');
     const customerId = String(body.customerId || '').trim();
     if (!customerId) throw new NotFoundException('Mijoz tanlanmagan');
     const customer: any = await this.ensureCustomerAccess(customerId, user);
@@ -38,19 +46,22 @@ export class RemindersService {
         customerId,
         assignedUserId,
         createdById: user.id,
-        type: body.type || 'CALL',
-        title: body.title || (body.type === 'REPEAT_SALE' ? `${customer.name} uchun qayta sotuv eslatmasi` : `${customer.name}ga qo'ng'iroq qilish`),
+        type,
+        title: body.title || (type === 'REPEAT_SALE' ? `${customer.name} uchun qayta sotuv eslatmasi` : `${customer.name}ga qo'ng'iroq qilish`),
+        note: this.optionalText(body.note ?? body.comment),
         remindAt,
       },
       include: { customer: true, assignedUser: true },
     });
     await this.prisma.customer.update({ where: { id: customerId }, data: { nextContactAt: remindAt } });
-    await this.activity(customerId, 'REMINDER_CREATED', `Eslatma rejalashtirildi: ${remindAt.toISOString()}`, user.id, { reminderId: item.id, type: item.type });
+    const comment = item.note ? `\nIzoh: ${item.note}` : '';
+    await this.activity(customerId, 'REMINDER_CREATED', `Eslatma rejalashtirildi: ${remindAt.toISOString()}${comment}`, user.id, { reminderId: item.id, type: item.type, note: item.note || null });
     return this.dto(item);
   }
 
   async complete(id: string, user: any) {
     const current: any = await this.findOwned(id, user);
+    this.ensurePermission(user, ['CALL', 'FOLLOW_UP'].includes(current.type) ? 'calls.create' : 'reminders.edit');
     if (current.status !== 'PENDING') return this.dto(current);
     const completedAt = new Date();
     const item = await this.prisma.reminder.update({ where: { id }, data: { status: 'COMPLETED' as any, completedAt }, include: { customer: true, assignedUser: true } });
@@ -63,6 +74,7 @@ export class RemindersService {
 
   async cancel(id: string, user: any) {
     const current: any = await this.findOwned(id, user);
+    this.ensurePermission(user, ['CALL', 'FOLLOW_UP'].includes(current.type) ? 'calls.create' : 'reminders.edit');
     if (current.status !== 'PENDING') return this.dto(current);
     const item = await this.prisma.reminder.update({ where: { id }, data: { status: 'CANCELLED' as any }, include: { customer: true, assignedUser: true } });
     if (item.customer.nextContactAt && new Date(item.customer.nextContactAt).getTime() === new Date(item.remindAt).getTime()) await this.prisma.customer.update({ where: { id: item.customerId }, data: { nextContactAt: null } });
@@ -146,6 +158,11 @@ export class RemindersService {
     }
   }
 
+  private ensurePermission(user: any, permission: string) {
+    if (this.canViewAll(user) || user?.permissions?.includes(permission)) return;
+    throw new ForbiddenException('Bu kommunikatsiya amaliga ruxsat yo\'q');
+  }
+
   private async cancelNextContactReminders(customerId: string) {
     await this.prisma.reminder.updateMany({ where: { customerId, status: 'PENDING' as any, type: { in: ['CALL', 'FOLLOW_UP'] } }, data: { status: 'CANCELLED' as any } });
   }
@@ -166,6 +183,7 @@ export class RemindersService {
       remindAt: item.remindAt,
       status: item.status,
       completedAt: item.completedAt,
+      note: item.note || null,
       createdAt: item.createdAt,
     };
   }
@@ -185,5 +203,10 @@ export class RemindersService {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return String(value);
     return new Intl.DateTimeFormat('uz-UZ', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+  }
+
+  private optionalText(value: any) {
+    const text = String(value || '').trim();
+    return text || null;
   }
 }

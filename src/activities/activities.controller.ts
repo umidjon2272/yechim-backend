@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
-import { RequirePermissions } from '../permissions/permissions.decorator';
+import { RequireAnyPermission, RequirePermissions } from '../permissions/permissions.decorator';
 import { ActivitiesService } from './activities.service';
 
 type AuthRequest = Request & { user?: any };
@@ -9,19 +9,19 @@ type AuthRequest = Request & { user?: any };
 export class ActivitiesController {
   constructor(private readonly activities: ActivitiesService) {}
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('activities.view')
   @Get()
   list(@Query() query: any, @Req() req: AuthRequest) {
     return this.activities.list(query, req.user);
   }
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('activities.view')
   @Get(':id')
   get(@Param('id') id: string, @Req() req: AuthRequest) {
     return this.activities.get(id, req.user);
   }
 
-  @RequirePermissions('customers.edit')
+  @RequireAnyPermission('activities.create', 'calls.create')
   @Post()
   create(@Body() body: any, @Req() req: AuthRequest) {
     return this.activities.create(body, req.user);
@@ -32,19 +32,19 @@ export class ActivitiesController {
 export class CommentsController {
   constructor(private readonly activities: ActivitiesService) {}
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('comments.view')
   @Get()
   list(@Query() query: any, @Req() req: AuthRequest) {
     return this.activities.comments(query, req.user);
   }
 
-  @RequirePermissions('customers.edit')
+  @RequirePermissions('comments.create')
   @Post()
   create(@Body() body: any, @Req() req: AuthRequest) {
     return this.activities.create({ ...body, type: 'NOTE' }, req.user);
   }
 
-  @RequirePermissions('customers.edit')
+  @RequirePermissions('comments.create')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req: AuthRequest) {
     return this.activities.remove(id, req.user);
@@ -55,7 +55,7 @@ export class CommentsController {
 export class TimelineController {
   constructor(private readonly activities: ActivitiesService) {}
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('history.view')
   @Get()
   get(@Query('entityType') entityType: string, @Query('entityId') entityId: string, @Req() req: AuthRequest) {
     if (entityType && entityType !== 'customer') return { items: [], total: 0 };

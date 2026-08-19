@@ -117,6 +117,21 @@ model Stage {
   @@index([pipelineId, order])
 }
 
+model Currency {
+  id        String     @id @default(cuid())
+  code      String     @unique
+  name      String
+  symbol    String
+  isDefault Boolean    @default(false)
+  isActive  Boolean    @default(true)
+  customers Customer[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([isActive])
+  @@index([isDefault])
+}
+
 model Customer {
   id                  String          @id @default(cuid())
   name                String
@@ -129,6 +144,8 @@ model Customer {
   service             String?
   amount              Decimal         @default(0)
   depositAmount       Decimal?
+  currencyId          String?
+  currency            Currency?       @relation(fields: [currencyId], references: [id], onDelete: Restrict)
   notes               String?
   note                String?
   address             Json?
@@ -174,6 +191,7 @@ model Customer {
   @@index([installerEmployeeId])
   @@index([status])
   @@index([deletedAt])
+  @@index([currencyId])
 }
 
 model CustomerGroup {
@@ -426,6 +444,7 @@ model Reminder {
   createdBy      User?          @relation("CreatedReminders", fields: [createdById], references: [id], onDelete: SetNull)
   type           String         @default("CALL")
   title          String
+  note           String?
   remindAt       DateTime
   status         ReminderStatus @default(PENDING)
   completedAt    DateTime?

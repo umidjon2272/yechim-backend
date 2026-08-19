@@ -10,4 +10,9 @@ export class UsersController {
   updateMe(@Req() req: Request & { user?: any }, @Body() body: any) {
     return this.users.updateMe(req.user.id, body);
   }
+
+  @Patch('me/login')
+  updateMyLogin(@Req() req: Request & { user?: any }, @Body() body: any) {
+    return this.users.updateMyLogin(req.user, body.username);
+  }
 }

@@ -86,6 +86,12 @@ async function main() {
     });
   }
 
+  await prisma.currency.upsert({
+    where: { code: "UZS" },
+    update: { isActive: true },
+    create: { id: "currency-uzs", code: "UZS", name: "O‘zbekiston so‘mi", symbol: "so‘m", isDefault: true },
+  });
+
   for (const name of ["VIP", "Bito", "Ilxom aka mijozlari"]) {
     await prisma.customerGroup.upsert({
       where: { name },

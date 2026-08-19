@@ -13,30 +13,37 @@ export class ActivitiesService {
     await this.ensureCustomerAccess(customerId, user);
     const { page, pageSize, skip, take } = pagination(query);
     const where: any = { customerId };
-    if (query.type) where.type = query.type;
+    if (!this.canViewComments(user)) where.type = { not: 'NOTE' };
+    if (query.type && (this.canViewComments(user) || query.type !== 'NOTE')) where.type = query.type;
     const [total, items] = await Promise.all([
       this.prisma.activity.count({ where }),
       this.prisma.activity.findMany({ where, include: { createdBy: { include: { team: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
-    return paged(items.map((item) => this.dto(item)), total, page, pageSize);
+    return paged(items.map((item) => this.dto(item, user)), total, page, pageSize);
   }
 
   async get(id: string, user: any) {
     if (this.isPartner(user)) throw new ForbiddenException('Partner ichki tarixni ko\'ra olmaydi');
     const item = await this.prisma.activity.findUnique({ where: { id }, include: { createdBy: { include: { team: true } } } });
     if (!item) throw new NotFoundException('Faoliyat topilmadi');
+    if (item.type === 'NOTE' && !this.canViewComments(user)) throw new ForbiddenException('Izohlarni ko\'rishga ruxsat yo\'q');
     await this.ensureCustomerAccess(item.customerId, user);
-    return this.dto(item);
+    return this.dto(item, user);
   }
 
   async create(body: any, user: any) {
     const customerId = String(body.customerId || '').trim();
     if (!customerId) throw new NotFoundException('Mijoz tanlanmagan');
+    const type = String(body.type || 'NOTE').toUpperCase();
+    const requiredPermission = type === 'NOTE' ? 'comments.create' : ['CALL', 'FOLLOW_UP'].includes(type) ? 'calls.create' : 'activities.create';
+    if (!this.isAdmin(user) && !user?.permissions?.includes(requiredPermission)) {
+      throw new ForbiddenException('Bu faoliyat turini yaratishga ruxsat yo\'q');
+    }
     await this.ensureCustomerAccess(customerId, user);
     const message = String(body.message || body.text || [body.title, body.description].filter(Boolean).join(': ') || '').trim();
     if (!message) throw new ForbiddenException('Izoh matni bo\'sh bo\'lishi mumkin emas');
     const item = await this.prisma.activity.create({
-      data: { customerId, type: body.type || 'NOTE', message, metadata: body.metadata || undefined, createdById: user.id },
+      data: { customerId, type, message, metadata: body.metadata || undefined, createdById: user.id },
       include: { createdBy: { include: { team: true } } },
     });
     return this.dto(item);
@@ -60,26 +67,30 @@ export class ActivitiesService {
     if (this.isPartner(user)) return { items: [], total: 0 };
     await this.ensureCustomerAccess(customerId, user);
     const items = await this.prisma.activity.findMany({
-      where: { customerId },
+      where: { customerId, ...(this.canViewComments(user) ? {} : { type: { not: 'NOTE' } }) },
       include: { createdBy: { include: { team: true } } },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
-    return { items: items.map((item) => this.dto(item)), total: items.length };
+    return { items: items.map((item) => this.dto(item, user)), total: items.length };
   }
 
-  private dto(item: any) {
+  private dto(item: any, user?: any) {
+    const canViewComments = this.canViewComments(user);
+    const message = canViewComments ? item.message : String(item.message || '').replace(/\nIzoh:[\s\S]*$/i, '').trim();
+    const metadata = canViewComments ? item.metadata || null : this.hideCommentMetadata(item.metadata);
     return {
       id: item.id,
       type: item.type,
       title: item.type,
-      description: item.message,
-      message: item.message,
+      description: message,
+      message,
+      text: message,
       date: item.createdAt,
       createdAt: item.createdAt,
       employeeName: item.createdBy?.name || null,
       author: item.createdBy ? { id: item.createdBy.id, name: item.createdBy.name, avatarUrl: item.createdBy.avatarUrl } : null,
-      metadata: item.metadata || null,
+      metadata,
     };
   }
 
@@ -100,5 +111,19 @@ export class ActivitiesService {
 
   private isPartner(user: any) {
     return Boolean(user?.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(String(user?.role || '').toUpperCase());
+  }
+
+  private canViewComments(user: any) {
+    return ['ADMIN', 'SUPER_ADMIN'].includes(String(user?.role || '').toUpperCase()) || user?.permissions?.includes('comments.view');
+  }
+
+  private isAdmin(user: any) {
+    return ['ADMIN', 'SUPER_ADMIN'].includes(String(user?.role || '').toUpperCase());
+  }
+
+  private hideCommentMetadata(metadata: any) {
+    if (!metadata || typeof metadata !== 'object') return metadata || null;
+    const { note: _note, description: _description, ...safe } = metadata;
+    return safe;
   }
 }

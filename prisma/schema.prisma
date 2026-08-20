@@ -107,6 +107,7 @@ model Stage {
   label      String
   order      Int
   isFinal    Boolean    @default(false)
+  isSystem   Boolean    @default(false)
   pipelineId String
   pipeline   Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   customers  Customer[]

@@ -54,7 +54,7 @@ export class PipelinesController {
     return this.pipelines.updateStage(id, body);
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('customers.edit')
   @Delete('stages/:id')
   deleteStage(@Param('id') id: string, @Body() body: any) {
     return this.pipelines.deleteStage(id, body?.replacementStageId);

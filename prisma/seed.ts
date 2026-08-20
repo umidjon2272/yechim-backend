@@ -5,15 +5,15 @@ import { ALL_PERMISSIONS } from "../src/common/defaults";
 const prisma = new PrismaClient();
 
 const DEFAULT_STAGES = [
-  { id: "NEW", label: "Yangi" },
-  { id: "CONTACTED", label: "Gaplashilgan" },
-  { id: "IN_PROGRESS", label: "Jarayonda" },
-  { id: "FOLLOW_UP", label: "Qayta aloqaga chiqish" },
-  { id: "FUTURE_SALE", label: "Keyinchalik sotuv" },
-  { id: "DEPOSIT_RECEIVED", label: "Zaklad olingan" },
-  { id: "PAID", label: "To'lov qilindi" },
-  { id: "INSTALLATION_REQUIRED", label: "O'rnatish kerak" },
-  { id: "INSTALLED", label: "O'rnatib bo'ldi", isFinal: true },
+  { id: "NEW", label: "Yangi", isSystem: true },
+  { id: "CONTACTED", label: "Gaplashilgan", isSystem: true },
+  { id: "IN_PROGRESS", label: "Jarayonda", isSystem: true },
+  { id: "FOLLOW_UP", label: "Qayta aloqaga chiqish", isSystem: true },
+  { id: "FUTURE_SALE", label: "Keyinchalik sotuv", isSystem: true },
+  { id: "DEPOSIT_RECEIVED", label: "Zaklad olingan", isSystem: true },
+  { id: "PAID", label: "To'lov qilindi", isSystem: true },
+  { id: "INSTALLATION_REQUIRED", label: "O'rnatish kerak", isSystem: true },
+  { id: "INSTALLED", label: "O'rnatib bo'ldi", isFinal: true, isSystem: true },
 ];
 
 async function main() {
@@ -77,6 +77,7 @@ async function main() {
         order: index + 1,
         pipelineId: pipeline.id,
         isFinal: Boolean(stage.isFinal),
+        isSystem: true,
       },
       create: {
         ...stage,

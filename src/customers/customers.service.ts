@@ -128,10 +128,11 @@ export class CustomersService {
         include: includeCustomer,
       });
       await this.createActivity(customer.id, 'CUSTOMER_CREATED', 'Mijoz yaratildi', actor?.id);
+      await this.recordStageHistory(customer.id, null, customer.stage, customer.createdAt || new Date());
       await this.createStageAutomation(customer, stageId, actor);
       if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL', body.reminderNote ?? body.note ?? body.comment);
       const quickActionErrors = await this.persistQuickActions(customer, body.quickActions, actor);
-      await this.syncPartnerReward(customer.id, new Date());
+      await this.syncPartnerReward(customer.id, customer.createdAt || new Date());
       return { ...this.dto(customer, actor), ...(quickActionErrors.length ? { quickActionErrors } : {}) };
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
@@ -150,6 +151,7 @@ export class CustomersService {
     }
     const requestedGroupIds = Array.isArray(body.groupIds) || body.groupId !== undefined ? this.normalizeGroupIds(body.groupIds, body.groupId) : undefined;
     if (requestedGroupIds) await this.assertEmployeeGroupWrite(requestedGroupIds, actor);
+    const stageEnteredAt = stageChanged ? new Date() : undefined;
     const data: any = {
       name: body.name,
       firstName: body.firstName,
@@ -175,7 +177,7 @@ export class CustomersService {
       programs: body.programs ? this.normalizePrograms(body.programs) : undefined,
       status: body.status,
       stageId: nextStageId,
-      stageEnteredAt: stageChanged ? new Date() : undefined,
+      stageEnteredAt,
       assignedEmployeeId: body.assignedEmployeeId === '' ? null : body.assignedEmployeeId,
       nextContactAt: body.nextContactAt === undefined ? undefined : body.nextContactAt === null || body.nextContactAt === '' ? null : this.toDate(body.nextContactAt),
       installationAt: body.installationAt === undefined ? undefined : body.installationAt === null || body.installationAt === '' ? null : this.toDate(body.installationAt),
@@ -188,7 +190,13 @@ export class CustomersService {
     try {
       const customer = await this.prisma.customer.update({ where: { id }, data, include: includeCustomer });
       if (stageChanged) {
-        await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id);
+        await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id, {
+          fromStageId: current.stageId,
+          toStageId: customer.stageId,
+          fromIsFinal: Boolean(current.isCompleted),
+          toIsFinal: Boolean(customer.stage?.isFinal),
+        });
+        await this.recordStageHistory(customer.id, current.stageId, customer.stage, stageEnteredAt || new Date(), Boolean(current.isCompleted), Boolean(customer.stage?.isFinal));
         await this.createStageAutomation(customer, customer.stageId, actor);
       }
       if (current.assignedEmployeeId !== customer.assignedEmployeeId) await this.createActivity(customer.id, 'ASSIGNED_CHANGED', `Mas'ul xodim o'zgardi`, actor?.id);
@@ -200,7 +208,7 @@ export class CustomersService {
         else await this.cancelPendingReminders(customer.id);
       }
       if (body.installationAt !== undefined || body.installerEmployeeId !== undefined) await this.syncInstallation(customer, actor);
-      if (stageChanged || body.stage || body.stageId || requestedGroupIds) await this.syncPartnerReward(customer.id, new Date());
+      if (stageChanged) await this.syncPartnerReward(customer.id, stageEnteredAt || new Date(), Boolean(current.isCompleted));
       return this.dto(customer, actor);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
@@ -228,11 +236,12 @@ export class CustomersService {
     this.ensurePartnerCannotWrite(actor);
     const current: any = await this.get(id, actor);
     const stageId = await this.resolveStageId(stage);
+    const stageEnteredAt = stageId !== current.stageId ? new Date() : undefined;
     const customer = await this.prisma.customer.update({
       where: { id },
       data: {
         stageId,
-        ...(stageId !== current.stageId ? { stageEnteredAt: new Date() } : {}),
+        ...(stageEnteredAt ? { stageEnteredAt } : {}),
         ...(body.depositAmount !== undefined && this.canViewField(actor, 'deposit') ? { depositAmount: body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount) } : {}),
         ...(body.nextContactAt !== undefined ? { nextContactAt: body.nextContactAt === null || body.nextContactAt === '' ? null : this.toDate(body.nextContactAt) } : {}),
         ...(body.installationAt !== undefined ? { installationAt: body.installationAt === null || body.installationAt === '' ? null : this.toDate(body.installationAt) } : {}),
@@ -241,7 +250,13 @@ export class CustomersService {
       include: includeCustomer,
     });
     if (stageId !== current.stageId) {
-      await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id);
+      await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id, {
+        fromStageId: current.stageId,
+        toStageId: customer.stageId,
+        fromIsFinal: Boolean(current.isCompleted),
+        toIsFinal: Boolean(customer.stage?.isFinal),
+      });
+      await this.recordStageHistory(customer.id, current.stageId, customer.stage, stageEnteredAt || new Date(), Boolean(current.isCompleted), Boolean(customer.stage?.isFinal));
       await this.createStageAutomation(customer, stageId, actor);
     }
     if (body.depositAmount !== undefined && this.canViewField(actor, 'deposit') && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
@@ -250,7 +265,7 @@ export class CustomersService {
       else await this.cancelPendingReminders(customer.id);
     }
     if (body.installationAt !== undefined || body.installerEmployeeId !== undefined || stageId === 'INSTALLATION_REQUIRED') await this.syncInstallation(customer, actor);
-    await this.syncPartnerReward(customer.id, new Date());
+    if (stageId !== current.stageId) await this.syncPartnerReward(customer.id, stageEnteredAt || new Date(), Boolean(current.isCompleted));
     return this.dto(customer, actor);
   }
 
@@ -263,8 +278,7 @@ export class CustomersService {
       data: { groups: { set: groupIds.map((groupId) => ({ id: groupId })) } },
       include: includeCustomer,
     });
-    await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
-    await this.syncPartnerReward(customer.id, new Date());
+      await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
     return this.dto(customer, actor);
   }
 
@@ -303,8 +317,8 @@ export class CustomersService {
     return this.update(id, { programs: (current.programs || []).filter((p: any) => p.id !== programId) }, actor);
   }
 
-  async filterOptions() {
-    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null } });
+  async filterOptions(actor?: any) {
+    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, ...customerScopeWhere(actor) } });
     const cities = new Set<string>();
     const programs = new Set<string>();
     const stageCounts: Record<string, number> = {};
@@ -369,7 +383,10 @@ export class CustomersService {
     if (requested.some((groupId) => !allowed.includes(groupId))) {
       throw new ForbiddenException('Siz faqat ruxsat berilgan guruhga mijoz qo\'sha olasiz');
     }
-    if (visibility === 'GROUPS') return requested.length ? requested : allowed;
+    if (visibility === 'GROUPS') {
+      if (!allowed.length) throw new ForbiddenException('Sizga ruxsat berilgan guruh biriktirilmagan');
+      return requested.length ? requested : allowed;
+    }
     if (requested.length) throw new ForbiddenException('Sizga guruhga mijoz qo\'shishga ruxsat berilmagan');
     return [];
   }
@@ -585,9 +602,12 @@ export class CustomersService {
     return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
   }
 
-  private async syncPartnerReward(customerId: string, completedAt: Date) {
+  private async syncPartnerReward(customerId: string, completedAt: Date, previousWasFinal = false) {
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, include: { groups: true, stage: true } });
     if (!customer?.stage) return;
+    // A customer coming back from a completed/final stage is not a new
+    // referral flow, even if the configured reward stage is reached again.
+    if (previousWasFinal || (await this.hasPriorFinalStageHistory(customerId, completedAt))) return;
     const period = `${completedAt.getUTCFullYear()}-${String(completedAt.getUTCMonth() + 1).padStart(2, '0')}`;
     await Promise.all(
       customer.groups.filter((group: any) => group.rewardStageId && group.rewardStageId === customer.stageId).map((group) =>
@@ -604,5 +624,34 @@ export class CustomersService {
         }),
       ),
     );
+  }
+
+  private async hasPriorFinalStageHistory(customerId: string, before: Date) {
+    const history = (this.prisma as any).customerStageHistory;
+    if (!history?.findFirst) return false;
+    const priorFinal = await history.findFirst({
+      where: {
+        customerId,
+        changedAt: { lt: before },
+        OR: [{ fromIsFinal: true }, { toIsFinal: true }],
+      },
+      select: { id: true },
+    });
+    return Boolean(priorFinal);
+  }
+
+  private async recordStageHistory(customerId: string, fromStageId: string | null, toStage: any, changedAt: Date, fromIsFinal = false, toIsFinal = false) {
+    const history = (this.prisma as any).customerStageHistory;
+    if (!history?.create || !toStage?.id) return;
+    await history.create({
+      data: {
+        customerId,
+        fromStageId,
+        toStageId: toStage.id,
+        fromIsFinal,
+        toIsFinal,
+        changedAt,
+      },
+    });
   }
 }

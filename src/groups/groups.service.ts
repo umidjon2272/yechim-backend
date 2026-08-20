@@ -37,11 +37,11 @@ export class GroupsService {
   async update(id: string, body: any, actor?: any) {
     if (!isAdmin(actor)) throw new ForbiddenException('Guruh reward sozlamalarini faqat admin boshqaradi');
     const item = await this.prisma.customerGroup.update({ where: { id }, data: { name: body.name === undefined ? undefined : String(body.name).trim(), partnerRewardPerCustomer: body.partnerRewardPerCustomer === undefined ? undefined : this.optionalNumber(body.partnerRewardPerCustomer), rewardStageId: body.rewardStageId === undefined ? undefined : await this.resolveRewardStageId(body.rewardStageId) } });
-    if (body.rewardStageId !== undefined || body.partnerRewardPerCustomer !== undefined) await this.syncConfiguredRewards(id);
     return this.dto(item);
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor?: any) {
+    if (!isAdmin(actor)) throw new ForbiddenException('Guruhni faqat admin boshqarishi mumkin');
     const group = await this.prisma.customerGroup.findUnique({ where: { id } });
     if (!group) throw new NotFoundException('Guruh topilmadi');
     await this.prisma.customerGroup.delete({ where: { id } });
@@ -188,18 +188,4 @@ export class GroupsService {
     return value.toISOString().slice(0, 10);
   }
 
-  private async syncConfiguredRewards(groupId: string) {
-    const group = await this.prisma.customerGroup.findUnique({ where: { id: groupId }, select: { id: true, rewardStageId: true, partnerRewardPerCustomer: true } });
-    if (!group?.rewardStageId) return;
-    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, stageId: group.rewardStageId, groups: { some: { id: groupId } } }, select: { id: true, stageEnteredAt: true, createdAt: true } });
-    await Promise.all(customers.map((customer) => {
-      const completedAt = customer.stageEnteredAt || customer.createdAt;
-      const period = this.periodKey(completedAt);
-      return this.prisma.partnerReward.upsert({
-        where: { groupId_customerId: { groupId, customerId: customer.id } },
-        update: { amount: group.partnerRewardPerCustomer ?? 0 },
-        create: { groupId, customerId: customer.id, period, amount: group.partnerRewardPerCustomer ?? 0, completedAt },
-      });
-    }));
-  }
 }

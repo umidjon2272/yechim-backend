@@ -3,7 +3,7 @@ import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
 import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber } from './mappers';
 import { paged, pagination } from './pagination';
 import { PrismaService } from '../prisma/prisma.service';
-import { customerScopeWhere, isPartner } from './access';
+import { customerScopeWhere, isAdmin, isPartner } from './access';
 
 @Injectable()
 export class SupportService {
@@ -47,24 +47,42 @@ export class SupportService {
   async customerOptions(actor?: any) {
     const partnerGroupId = isPartner(actor) ? actor.partnerGroupId : null;
     const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(actor?.role || '').toUpperCase()) || actor?.permissions?.includes('customers.viewAll');
-    const customers = await this.prisma.customer.findMany({ where: { AND: [{ deletedAt: null }, canViewAll ? {} : customerScopeWhere(actor)] } });
+    const canViewPipelineTotal = isAdmin(actor) || actor?.permissions?.includes('customers.viewPipelineTotal');
+    const customers = await this.prisma.customer.findMany({
+      where: { AND: [{ deletedAt: null }, canViewAll ? {} : customerScopeWhere(actor)] },
+      include: { currency: true },
+    });
     const stages = await this.prisma.stage.findMany({ orderBy: { order: 'asc' } });
     const cities = new Set<string>();
     const programs = new Set<string>();
     const stageCounts: Record<string, number> = {};
+    const stageTotals: Record<string, Record<string, { currency: any; amount: number }>> = {};
     customers.forEach((c) => {
       const city = (c.address as any)?.city;
       if (city) cities.add(city);
       if (c.service) programs.add(c.service);
       if (Array.isArray(c.programs)) c.programs.forEach((p: any) => p.name && programs.add(p.name));
       stageCounts[c.stageId] = (stageCounts[c.stageId] || 0) + 1;
+      if (canViewPipelineTotal) {
+        const currency = c.currency || { id: null, code: 'UZS', symbol: "so'm" };
+        const currencyKey = currency.id || currency.code;
+        stageTotals[c.stageId] ||= {};
+        stageTotals[c.stageId][currencyKey] ||= { currency, amount: 0 };
+        stageTotals[c.stageId][currencyKey].amount += toNumber(c.amount);
+      }
     });
-    return {
+    const response: any = {
       cities: partnerGroupId ? [] : [...cities],
       programs: partnerGroupId ? [] : [...programs],
       stageCounts,
       stages: stages.map((s) => ({ id: s.id, label: s.label })),
     };
+    if (canViewPipelineTotal) {
+      response.stageTotals = Object.fromEntries(
+        Object.entries(stageTotals).map(([stageId, totals]) => [stageId, Object.values(totals)]),
+      );
+    }
+    return response;
   }
 
   async fieldDefs(query: any) {

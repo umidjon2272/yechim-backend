@@ -41,22 +41,6 @@ WHERE group_row."rewardStageId" IS NULL
   AND pipeline_row."name" = 'Asosiy savdo'
   AND stage_row."isFinal" = true;
 
--- Repair legacy customers that are already in the configured trigger stage.
--- This makes the first deploy immediately visible to existing Partners while
--- the application continues to use an upsert for all future transitions.
-INSERT INTO "PartnerReward" ("id", "groupId", "customerId", "period", "amount", "completedAt", "createdAt", "updatedAt")
-SELECT
-  md5(c."id" || ':' || g."id" || ':' || to_char(COALESCE(c."stageEnteredAt", c."createdAt"), 'YYYY-MM')),
-  g."id",
-  c."id",
-  to_char(COALESCE(c."stageEnteredAt", c."createdAt"), 'YYYY-MM'),
-  COALESCE(g."partnerRewardPerCustomer", 0),
-  COALESCE(c."stageEnteredAt", c."createdAt"),
-  CURRENT_TIMESTAMP,
-  CURRENT_TIMESTAMP
-FROM "Customer" c
-JOIN "CustomerGroup" g ON g."rewardStageId" = c."stageId"
-JOIN "_CustomerGroups" cg ON cg."A" = c."id" AND cg."B" = g."id"
-WHERE c."deletedAt" IS NULL
-ON CONFLICT ("groupId", "customerId") DO UPDATE
-SET "amount" = EXCLUDED."amount";
+-- Existing customers in the configured stage are intentionally not rewarded
+-- here. Rewards are earned only by a new stage transition after deployment;
+-- retroactive configuration must never create a payout.

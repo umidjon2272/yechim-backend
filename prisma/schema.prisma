@@ -122,6 +122,8 @@ model Stage {
   pipeline   Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   customers  Customer[]
   rewardGroups CustomerGroup[] @relation("GroupRewardStage")
+  fromStageHistory CustomerStageHistory[] @relation("StageHistoryFrom")
+  toStageHistory   CustomerStageHistory[] @relation("StageHistoryTo")
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
@@ -190,6 +192,7 @@ model Customer {
   tasks               Task[]
   installations       Installation[]
   activities          Activity[]
+  stageHistory        CustomerStageHistory[]
   reminders           Reminder[]
   deletedAt           DateTime?
   createdAt           DateTime        @default(now())
@@ -220,6 +223,23 @@ model CustomerGroup {
   updatedAt                DateTime        @updatedAt
 
   @@index([rewardStageId])
+}
+
+model CustomerStageHistory {
+  id          String    @id @default(cuid())
+  customerId  String
+  fromStageId String?
+  toStageId   String?
+  fromIsFinal Boolean   @default(false)
+  toIsFinal   Boolean   @default(false)
+  changedAt   DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  fromStage   Stage?    @relation("StageHistoryFrom", fields: [fromStageId], references: [id], onDelete: SetNull)
+  toStage     Stage?    @relation("StageHistoryTo", fields: [toStageId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, changedAt])
+  @@index([customerId, fromIsFinal, toIsFinal])
 }
 
 model UserAllowedGroup {

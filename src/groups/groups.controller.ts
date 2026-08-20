@@ -33,7 +33,7 @@ export class GroupsController {
 
   @RequirePermissions('customers.delete')
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.groups.remove(id);
+  remove(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.groups.remove(id, req.user);
   }
 }

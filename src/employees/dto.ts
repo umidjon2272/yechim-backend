@@ -44,3 +44,9 @@ export class CreateEmployeeDto {
   @IsString()
   partnerGroupId?: string;
 }
+
+export class UpdateEmployeePermissionsDto {
+  @IsArray()
+  @IsString({ each: true })
+  permissions: string[];
+}

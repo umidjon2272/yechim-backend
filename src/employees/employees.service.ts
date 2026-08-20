@@ -92,7 +92,7 @@ export class EmployeesService {
             avatarUrl: body.avatarUrl,
           };
       Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
-      if (data.permissions) data.permissions = this.sanitizePermissions(data.permissions);
+      if (data.permissions !== undefined) data.permissions = this.sanitizePermissions(data.permissions);
       if (data.role !== undefined && !['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES', 'SUPPORT', 'INSTALLER', 'DEVELOPER', 'EMPLOYEE'].includes(String(data.role).toUpperCase())) delete data.role;
       const user = await this.prisma.user.update({ where: { id }, data, include: { team: true, partnerGroup: true } });
       if (data.username !== undefined) await this.revokeSessions(id);
@@ -102,6 +102,19 @@ export class EmployeesService {
       if (uniqueConflict(error)) throw new ConflictException(this.uniqueMessage(error));
       throw error;
     }
+  }
+
+  async updatePermissions(id: string, permissions: string[], actor?: any) {
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase())) throw new ForbiddenException('Ruxsatlarni faqat admin boshqaradi');
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('Xodim topilmadi');
+
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: { permissions: this.sanitizePermissions(permissions) },
+      include: { team: true, partnerGroup: true },
+    });
+    return publicUser(updated);
   }
 
   async setStatus(id: string, status: string, actor?: any) {

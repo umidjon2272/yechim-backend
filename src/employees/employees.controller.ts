@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
-import { CreateEmployeeDto } from './dto';
+import { CreateEmployeeDto, UpdateEmployeePermissionsDto } from './dto';
 import { EmployeesService } from './employees.service';
 
 @Controller('employees')
@@ -24,6 +24,12 @@ export class EmployeesController {
   @Post()
   create(@Body() dto: CreateEmployeeDto, @Req() req: Request & { user?: any }) {
     return this.employees.create(dto, req.user);
+  }
+
+  @RequirePermissions('employees.edit')
+  @Patch(':id/permissions')
+  updatePermissions(@Param('id') id: string, @Body() dto: UpdateEmployeePermissionsDto, @Req() req: Request & { user?: any }) {
+    return this.employees.updatePermissions(id, dto.permissions, req.user);
   }
 
   @RequirePermissions('employees.edit')

@@ -46,7 +46,7 @@ export class AuthService {
       where: {
         OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
       },
-      include: { team: true },
+      include: { team: true, allowedCustomerGroups: true },
     });
     if (!user || user.status !== 'active') throw new UnauthorizedException("Login yoki parol noto'g'ri");
     const ok = await bcrypt.compare(password, user.passwordHash);
@@ -63,7 +63,7 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('Refresh token eskirgan');
     }
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true } });
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true, allowedCustomerGroups: true } });
     if (!user?.refreshTokenHash) throw new UnauthorizedException('Sessiya topilmadi');
     const ok = await bcrypt.compare(refreshToken, user.refreshTokenHash);
     if (!ok) throw new UnauthorizedException('Sessiya topilmadi');

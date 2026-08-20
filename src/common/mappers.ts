@@ -17,6 +17,8 @@ export function publicUser(user: any) {
     phone: user.phone,
     role: user.role,
     permissions: user.permissions || [],
+    customerScope: user.customerScope || 'ALL',
+    allowedGroupIds: (user.allowedCustomerGroups || []).map((item: any) => item.groupId),
     status: user.status,
     avatarUrl: user.avatarUrl,
     team: user.team ? { id: user.team.id, name: user.team.name } : null,
@@ -25,20 +27,22 @@ export function publicUser(user: any) {
   };
 }
 
-export function customerDto(customer: any) {
+export function customerDto(customer: any, user?: any) {
   if (!customer) return null;
   const groups = customer.groups || [];
+  const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(user?.role);
+  const canSee = (permission: string) => !user || isAdmin || user.permissions?.includes(permission);
   return {
     id: customer.id,
     name: customer.name,
     firstName: customer.firstName,
     lastName: customer.lastName,
-    phone: customer.phone,
-    phone2: customer.phone2,
+    ...(canSee('customers.phone.view') ? { phone: customer.phone, phone2: customer.phone2 } : {}),
     telegram: customer.telegram,
     email: customer.email,
     service: customer.service,
-    amount: toNumber(customer.amount),
+    ...(canSee('customers.amount.view') ? { amount: toNumber(customer.amount) } : {}),
+    ...(canSee('customers.deposit.view') ? { deposit: toNumber(customer.deposit) } : {}),
     notes: customer.notes,
     note: customer.note,
     address: customer.address || {},

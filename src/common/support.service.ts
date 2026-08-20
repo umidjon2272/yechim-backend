@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
 import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber } from './mappers';
 import { paged, pagination } from './pagination';
@@ -353,5 +353,140 @@ export class SupportService {
     const items = await this.prisma.dealItem.findMany({ where: { dealId } });
     if (!items.length) return;
     await this.prisma.deal.update({ where: { id: dealId }, data: { value: items.reduce((sum, item) => sum + toNumber(item.total), 0) } });
+  }
+
+  async activities(query: any, user: any) {
+    const where: any = {};
+    if (query.customerId) {
+      await this.ensureCustomerAccessible(query.customerId, user);
+      where.customerId = query.customerId;
+    }
+    const items = await this.prisma.activity.findMany({
+      where,
+      include: { createdBy: { include: { team: true } }, customer: true },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+    });
+    return { items: items.map((item) => this.activityDto(item)), total: items.length };
+  }
+
+  async activity(id: string, user: any) {
+    const item = await this.prisma.activity.findUnique({ where: { id }, include: { createdBy: { include: { team: true } }, customer: true } });
+    if (!item) throw new NotFoundException('Faoliyat topilmadi');
+    if (item.customerId) await this.ensureCustomerAccessible(item.customerId, user);
+    return this.activityDto(item);
+  }
+
+  async createActivity(body: any, user: any) {
+    if (body.customerId) await this.ensureCustomerAccessible(body.customerId, user);
+    const item = await this.prisma.activity.create({
+      data: {
+        type: body.type || 'CALL',
+        title: body.title || 'Faoliyat',
+        description: body.description || null,
+        date: body.date || new Date().toISOString(),
+        duration: body.duration === '' || body.duration == null ? null : Number(body.duration),
+        result: body.result || null,
+        nextAction: body.nextAction || null,
+        customerId: body.customerId || null,
+        createdById: user.id,
+      },
+      include: { createdBy: { include: { team: true } }, customer: true },
+    });
+    return this.activityDto(item);
+  }
+
+  async reminders(query: any, user: any) {
+    const where: any = {};
+    if (query.customerId) {
+      await this.ensureCustomerAccessible(query.customerId, user);
+      where.customerId = query.customerId;
+    }
+    const items = await this.prisma.reminder.findMany({ where, orderBy: { remindAt: 'asc' }, include: { customer: true } });
+    return { items, total: items.length };
+  }
+
+  async createReminder(body: any, user: any) {
+    if (body.customerId) await this.ensureCustomerAccessible(body.customerId, user);
+    const remindAt = body.remindAt ? new Date(body.remindAt) : null;
+    const item = await this.prisma.reminder.create({
+      data: {
+        title: body.title || 'Mijoz bilan bog\'lanish',
+        note: body.note || body.description || null,
+        remindAt: remindAt && !Number.isNaN(remindAt.getTime()) ? remindAt : null,
+        customerId: body.customerId || null,
+        createdById: user.id,
+      },
+      include: { customer: true },
+    });
+    return item;
+  }
+
+  async comments(query: any, user: any) {
+    if (query.entityType === 'customer' && query.entityId) await this.ensureCustomerAccessible(query.entityId, user);
+    const items = await this.prisma.comment.findMany({
+      where: { entityType: query.entityType, entityId: query.entityId },
+      include: { author: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return { items: items.map((item) => this.commentDto(item)), total: items.length };
+  }
+
+  async createComment(body: any, user: any) {
+    if (body.entityType === 'customer' && body.entityId) await this.ensureCustomerAccessible(body.entityId, user);
+    const item = await this.prisma.comment.create({
+      data: { entityType: body.entityType, entityId: body.entityId, text: body.text, authorId: user.id },
+      include: { author: true },
+    });
+    return this.commentDto(item);
+  }
+
+  async updateComment(id: string, body: any, user: any) {
+    const current = await this.prisma.comment.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Izoh topilmadi');
+    if (current.authorId !== user.id && !['SUPER_ADMIN', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Bu izohni tahrirlashga ruxsat yoq');
+    return this.prisma.comment.update({ where: { id }, data: { text: body.text }, include: { author: true } }).then((item) => this.commentDto(item));
+  }
+
+  async deleteComment(id: string, user: any) {
+    const current = await this.prisma.comment.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('Izoh topilmadi');
+    if (current.authorId !== user.id && !['SUPER_ADMIN', 'ADMIN'].includes(user.role)) throw new ForbiddenException('Bu izohni o\'chirishga ruxsat yoq');
+    await this.prisma.comment.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  async timeline(query: any, user: any) {
+    if (query.entityType === 'customer') await this.ensureCustomerAccessible(query.entityId, user);
+    const [activities, comments] = await Promise.all([
+      this.prisma.activity.findMany({ where: { customerId: query.entityId }, include: { createdBy: true }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.comment.findMany({ where: { entityType: query.entityType, entityId: query.entityId }, include: { author: true }, orderBy: { createdAt: 'desc' } }),
+    ]);
+    const items = [
+      ...activities.map((item) => this.activityDto(item)),
+      ...comments.map((item) => ({ ...this.commentDto(item), type: 'NOTE', title: 'Izoh', employeeName: item.author?.name })),
+    ].sort((a, b) => new Date(b.createdAt || b.date || 0).getTime() - new Date(a.createdAt || a.date || 0).getTime());
+    return { items, total: items.length };
+  }
+
+  private activityDto(item: any) {
+    const { createdBy, customer, ...rest } = item;
+    return { ...rest, employeeName: createdBy?.name, customer: customer ? { id: customer.id, name: customer.name } : null };
+  }
+
+  private commentDto(item: any) {
+    const { author, ...rest } = item;
+    return { ...rest, author: author ? { id: author.id, name: author.name, avatarUrl: author.avatarUrl } : null };
+  }
+
+  private async ensureCustomerAccessible(id: string, user: any) {
+    const customer = await this.prisma.customer.findFirst({ where: { id, deletedAt: null }, include: { groups: true } });
+    if (!customer) throw new NotFoundException('Mijoz topilmadi');
+    if (!user || ['SUPER_ADMIN', 'ADMIN'].includes(user.role) || user.customerScope === 'ALL' || user.permissions?.includes('customers.viewAll')) return;
+    if (user.customerScope === 'GROUPS' || user.permissions?.includes('customers.viewGroups')) {
+      const allowed = (user.allowedCustomerGroups || []).map((item: any) => item.groupId);
+      if (!customer.groups.some((group: any) => allowed.includes(group.id))) throw new ForbiddenException('Bu mijozni ko\'rishga ruxsat yoq');
+      return;
+    }
+    if (customer.assignedEmployeeId !== user.id) throw new ForbiddenException('Bu mijozni ko\'rishga ruxsat yoq');
   }
 }

@@ -272,7 +272,7 @@ export class SupportController {
     return this.support.createMessage(body, req.user);
   }
 
-  @RequirePermissions('dashboard.view')
+  @RequirePermissions('history.view')
   @Get('search')
   search(@Query('q') q = '') {
     return this.support.search(q);
@@ -302,34 +302,64 @@ export class SupportController {
     return { ok: true };
   }
 
-  @RequirePermissions('dashboard.view')
+  @RequirePermissions('history.view')
   @Get('timeline')
-  timeline() {
-    return { items: [] };
+  timeline(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.timeline(query, req.user);
   }
 
-  @RequirePermissions('dashboard.view')
+  @RequirePermissions('activities.view')
   @Get('activities')
-  activities() {
-    return { items: [], total: 0 };
+  activities(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.activities(query, req.user);
   }
 
-  @RequirePermissions('dashboard.view')
+  @RequirePermissions('activities.view')
+  @Get('activities/:id')
+  activity(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.activity(id, req.user);
+  }
+
+  @RequirePermissions('activities.create')
   @Post('activities')
   createActivity(@Body() body: any, @Req() req: Request & { user?: any }) {
-    return { id: `activity-${Date.now()}`, employeeName: req.user.name, createdAt: new Date().toISOString(), date: body.date || new Date().toISOString(), ...body };
+    return this.support.createActivity(body, req.user);
   }
 
-  @RequirePermissions('dashboard.view')
+  @RequirePermissions('reminders.view')
+  @Get('reminders')
+  reminders(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.reminders(query, req.user);
+  }
+
+  @RequirePermissions('reminders.create')
+  @Post('reminders')
+  createReminder(@Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.support.createReminder(body, req.user);
+  }
+
+  @RequirePermissions('comments.view')
   @Get('comments')
-  comments() {
-    return { items: [], total: 0 };
+  comments(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.comments(query, req.user);
   }
 
   @RequirePermissions('comments.create')
   @Post('comments')
   createComment(@Body() body: any, @Req() req: Request & { user?: any }) {
-    return { id: `comment-${Date.now()}`, author: { id: req.user.id, name: req.user.name }, createdAt: new Date().toISOString(), ...body };
+    return this.support.createComment(body, req.user);
+  }
+
+  @RequirePermissions('comments.create')
+  @Patch('comments/:id')
+  updateComment(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.support.updateComment(id, body, req.user);
+  }
+
+  @RequirePermissions('comments.create')
+  @Delete('comments/:id')
+  deleteComment(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.deleteComment(id, req.user);
   }
 
   @RequirePermissions('attachments.create')

@@ -29,7 +29,10 @@ export class PermissionsGuard implements CanActivate {
       throw new UnauthorizedException('Sessiya muddati tugagan');
     }
 
-    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { team: true } });
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      include: { team: true, allowedCustomerGroups: true },
+    });
     if (!user || user.status !== 'active') throw new UnauthorizedException('Foydalanuvchi faol emas');
     req.user = user;
 

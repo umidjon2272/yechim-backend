@@ -6,10 +6,14 @@ import { PrismaService } from '../prisma/prisma.service';
 export class GroupsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(query: any) {
+  async list(query: any, user: any) {
     const { page, pageSize, skip, take } = pagination(query);
     const search = String(query.search || '').trim();
-    const where = search ? { name: { contains: search, mode: 'insensitive' as const } } : {};
+    const allowedGroupIds = (user?.allowedCustomerGroups || []).map((item: any) => item.groupId);
+    const scope = user && !['SUPER_ADMIN', 'ADMIN'].includes(user.role) && user.customerScope === 'GROUPS'
+      ? { id: { in: allowedGroupIds } }
+      : {};
+    const where = search ? { AND: [scope, { name: { contains: search, mode: 'insensitive' as const } }] } : scope;
     const [total, items] = await Promise.all([
       this.prisma.customerGroup.count({ where }),
       this.prisma.customerGroup.findMany({ where, orderBy: { createdAt: 'desc' }, skip, take }),

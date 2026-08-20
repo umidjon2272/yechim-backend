@@ -9,6 +9,8 @@ import { PrismaService } from '../prisma/prisma.service';
 export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private readonly userInclude = { team: true, allowedCustomerGroups: true } as const;
+
   async list(query: any) {
     const { page, pageSize, skip, take } = pagination(query);
     const search = String(query.search || '').trim();
@@ -17,13 +19,13 @@ export class EmployeesService {
       : {};
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
-      this.prisma.user.findMany({ where, include: { team: true }, orderBy: { createdAt: 'desc' }, skip, take }),
+      this.prisma.user.findMany({ where, include: this.userInclude, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
     return paged(users.map((u) => publicUser(u)), total, page, pageSize);
   }
 
   async get(id: string) {
-    const user = await this.prisma.user.findUnique({ where: { id }, include: { team: true } });
+    const user = await this.prisma.user.findUnique({ where: { id }, include: this.userInclude });
     if (!user) throw new NotFoundException('Xodim topilmadi');
     return publicUser(user);
   }
@@ -40,10 +42,14 @@ export class EmployeesService {
           passwordHash: await bcrypt.hash(body.password, 12),
           role,
           permissions: body.permissions ?? ROLE_DEFAULT_PERMISSIONS[role] ?? ROLE_DEFAULT_PERMISSIONS.EMPLOYEE,
+          customerScope: body.customerScope || 'ALL',
           status: body.status || 'active',
           teamId: body.teamId || null,
+          ...(Array.isArray(body.allowedGroupIds)
+            ? { allowedCustomerGroups: { create: Array.from(new Set<string>(body.allowedGroupIds as string[])).map((groupId) => ({ groupId })) } }
+            : {}),
         } as any,
-        include: { team: true },
+        include: this.userInclude,
       });
       return publicUser(user);
     } catch (error) {
@@ -64,10 +70,17 @@ export class EmployeesService {
         status: body.status,
         avatarUrl: body.avatarUrl,
         teamId: body.teamId === '' ? null : body.teamId,
+        customerScope: body.customerScope,
       };
       Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
       if (body.password) data.passwordHash = await bcrypt.hash(body.password, 12);
-      const user = await this.prisma.user.update({ where: { id }, data, include: { team: true } });
+      if (Array.isArray(body.allowedGroupIds)) {
+        data.allowedCustomerGroups = {
+          deleteMany: {},
+          create: Array.from(new Set<string>(body.allowedGroupIds as string[])).map((groupId) => ({ groupId })),
+        };
+      }
+      const user = await this.prisma.user.update({ where: { id }, data, include: this.userInclude });
       return publicUser(user);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email, telefon yoki login allaqachon mavjud');
@@ -76,7 +89,7 @@ export class EmployeesService {
   }
 
   setStatus(id: string, status: string) {
-    return this.prisma.user.update({ where: { id }, data: { status }, include: { team: true } }).then(publicUser);
+    return this.prisma.user.update({ where: { id }, data: { status }, include: this.userInclude }).then(publicUser);
   }
 
   async tasks(id: string) {

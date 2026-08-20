@@ -31,4 +31,12 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsString()
   teamId?: string;
+
+  @IsOptional()
+  @IsString()
+  customerScope?: string;
+
+  @IsOptional()
+  @IsArray()
+  allowedGroupIds?: string[];
 }

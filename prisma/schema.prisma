@@ -41,6 +41,7 @@ model User {
   passwordHash     String
   role             Role     @default(EMPLOYEE)
   permissions      String[] @default([])
+  customerScope    String   @default("ALL")
   status           String   @default("active")
   avatarUrl        String?
   refreshTokenHash String?
@@ -53,6 +54,10 @@ model User {
   deals             Deal[]         @relation("DealSeller")
   installations     Installation[]
   payments          Payment[]
+  allowedCustomerGroups EmployeeAllowedGroup[] @relation("EmployeeAllowedGroups")
+  createdActivities Activity[] @relation("CreatedActivities")
+  createdReminders  Reminder[] @relation("CreatedReminders")
+  comments          Comment[] @relation("CommentAuthor")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -105,6 +110,7 @@ model Customer {
   email              String?         @unique
   service            String?
   amount             Decimal         @default(0)
+  deposit            Decimal         @default(0)
   notes              String?
   note               String?
   address            Json?
@@ -127,6 +133,8 @@ model Customer {
   deals              Deal[]
   tasks              Task[]
   installations      Installation[]
+  activities         Activity[]
+  reminders          Reminder[]
   deletedAt          DateTime?
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
@@ -142,8 +150,19 @@ model CustomerGroup {
   id        String     @id @default(cuid())
   name      String     @unique
   customers Customer[] @relation("CustomerGroups")
+  allowedEmployees EmployeeAllowedGroup[] @relation("EmployeeAllowedGroups")
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+}
+
+model EmployeeAllowedGroup {
+  employeeId String
+  groupId    String
+  employee   User          @relation("EmployeeAllowedGroups", fields: [employeeId], references: [id], onDelete: Cascade)
+  group      CustomerGroup @relation("EmployeeAllowedGroups", fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([employeeId, groupId])
+  @@index([groupId])
 }
 
 model CustomerFieldDef {
@@ -341,4 +360,57 @@ model Message {
   createdAt  DateTime @default(now())
 
   @@index([customerId])
+}
+
+model Activity {
+  id          String    @id @default(cuid())
+  type        String    @default("CALL")
+  title       String
+  description String?
+  date        String?
+  duration    Int?
+  result      String?
+  nextAction  String?
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?     @relation("CreatedActivities", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([createdById])
+  @@index([date])
+}
+
+model Reminder {
+  id          String    @id @default(cuid())
+  title       String
+  note        String?
+  remindAt    DateTime?
+  status      String    @default("PENDING")
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdById String?
+  createdBy   User?     @relation("CreatedReminders", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([createdById])
+  @@index([remindAt])
+}
+
+model Comment {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  text       String
+  authorId   String?
+  author     User?    @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([entityType, entityId])
+  @@index([authorId])
 }

@@ -19,6 +19,11 @@ export class TasksService {
     if (query.leadId) where.leadId = query.leadId;
     if (query.dealId) where.dealId = query.dealId;
     if (query.installationId) where.installationId = query.installationId;
+    if (!canViewAll) {
+      const customerScope = this.customerScope(user);
+      where.OR = [{ customerId: null }, { customer: customerScope }];
+      if (query.customerId) await this.ensureCustomerAccessible(query.customerId, user);
+    }
     const include = { assignedTo: { include: { team: true } }, createdBy: { include: { team: true } }, customer: true, deal: true };
     const [total, items] = await Promise.all([
       this.prisma.task.count({ where }),
@@ -33,11 +38,13 @@ export class TasksService {
       include: { assignedTo: { include: { team: true } }, createdBy: { include: { team: true } }, customer: true, deal: true },
     });
     if (!task) throw new NotFoundException('Vazifa topilmadi');
+    if (task.customerId) await this.ensureCustomerAccessible(task.customerId, user);
     this.ensureCanSee(task, user);
     return taskDto(task);
   }
 
   async create(body: any, user: any) {
+    if (body.customerId) await this.ensureCustomerAccessible(body.customerId, user);
     const assignedToId = body.assignedToId || body.assignedEmployeeId || user.id;
     const task = await this.prisma.task.create({
       data: {
@@ -63,6 +70,8 @@ export class TasksService {
   async update(id: string, body: any, user: any) {
     const current = await this.prisma.task.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('Vazifa topilmadi');
+    if (current.customerId) await this.ensureCustomerAccessible(current.customerId, user);
+    if (body.customerId) await this.ensureCustomerAccessible(body.customerId, user);
     const canEdit = ['SUPER_ADMIN', 'ADMIN'].includes(user.role) || user.permissions?.includes('tasks.edit');
     const ownStatusOnly = current.assignedToId === user.id && Object.keys(body).every((key) => key === 'status');
     if (!canEdit && !ownStatusOnly) throw new ForbiddenException('Bu vazifani tahrirlashga ruxsat yoq');
@@ -95,5 +104,24 @@ export class TasksService {
   private ensureCanSee(task: any, user: any) {
     const canViewAll = ['SUPER_ADMIN', 'ADMIN'].includes(user.role) || user.permissions?.includes('tasks.viewAll');
     if (!canViewAll && task.assignedToId !== user.id) throw new ForbiddenException('Bu vazifani korishga ruxsat yoq');
+  }
+
+  private customerScope(user: any) {
+    if (user.customerScope === 'GROUPS' || user.permissions?.includes('customers.viewGroups')) {
+      const allowed = (user.allowedCustomerGroups || []).map((item: any) => item.groupId);
+      return allowed.length ? { groups: { some: { id: { in: allowed } } } } : { id: '__no_customer_scope__' };
+    }
+    if (user.customerScope === 'OWN' || user.permissions?.includes('customers.viewOwn')) return { assignedEmployeeId: user.id };
+    return {};
+  }
+
+  private async ensureCustomerAccessible(id: string, user: any) {
+    if (['SUPER_ADMIN', 'ADMIN'].includes(user.role) || user.customerScope === 'ALL' || user.permissions?.includes('customers.viewAll')) return;
+    const customer = await this.prisma.customer.findFirst({ where: { id, deletedAt: null }, include: { groups: true } });
+    if (!customer) throw new NotFoundException('Mijoz topilmadi');
+    const scope = this.customerScope(user);
+    const allowed = scope.groups?.some?.id?.in;
+    if (allowed && !customer.groups.some((group: any) => allowed.includes(group.id))) throw new ForbiddenException('Bu mijozga vazifa biriktirishga ruxsat yoq');
+    if (scope.assignedEmployeeId && customer.assignedEmployeeId !== user.id) throw new ForbiddenException('Bu mijozga vazifa biriktirishga ruxsat yoq');
   }
 }

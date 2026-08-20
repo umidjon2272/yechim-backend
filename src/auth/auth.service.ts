@@ -51,7 +51,7 @@ export class AuthService {
       where: {
         OR: [{ email: identifier }, { username: identifier }, { phone: identifier }],
       },
-      include: { team: true, partnerGroup: true },
+      include: { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } },
     });
     if (!user || user.status !== 'active' || user.isActive === false) throw new UnauthorizedException("Login yoki parol noto'g'ri");
     const ok = await bcrypt.compare(password, user.passwordHash);
@@ -80,7 +80,7 @@ export class AuthService {
     const session = payload?.sid
       ? await this.prisma.userSession.findUnique({
           where: { id: payload.sid },
-          include: { user: { include: { team: true, partnerGroup: true } } },
+          include: { user: { include: { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } } } },
         })
       : null;
     const user = session?.user;

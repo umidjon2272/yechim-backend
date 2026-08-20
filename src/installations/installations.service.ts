@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { installationDto } from '../common/mappers';
+import { customerScopeWhere, isPartner } from '../common/access';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -53,13 +54,13 @@ export class InstallationsService {
   }
 
   private ensureNotPartner(user: any) {
-    if (user?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(String(user.role).toUpperCase())) {
+    if (isPartner(user)) {
       throw new ForbiddenException('Partner o\'rnatish ma\'lumotlarini ko\'ra olmaydi');
     }
   }
 
   private async ensureCustomerAccess(customerId: string, user: any) {
-    const customer: any = await this.prisma.customer.findFirst({ where: { id: customerId, deletedAt: null, ...(this.canViewAll(user) ? {} : { assignedEmployeeId: user.id }) }, select: { id: true, assignedEmployeeId: true } });
+    const customer: any = await this.prisma.customer.findFirst({ where: { AND: [{ id: customerId, deletedAt: null }, this.canViewAll(user) ? {} : customerScopeWhere(user)] }, select: { id: true, assignedEmployeeId: true } });
     if (!customer) throw new ForbiddenException('Bu mijoz uchun o\'rnatishga ruxsat yo\'q');
     return customer;
   }

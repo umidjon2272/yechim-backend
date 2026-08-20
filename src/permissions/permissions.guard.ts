@@ -39,7 +39,7 @@ export class PermissionsGuard implements CanActivate {
     const session = payload.sid
       ? await this.prisma.userSession.findUnique({
           where: { id: payload.sid },
-          include: { user: { include: { team: true, partnerGroup: true } } },
+          include: { user: { include: { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } } } },
         })
       : null;
     const user = session?.user;
@@ -47,6 +47,10 @@ export class PermissionsGuard implements CanActivate {
       throw new UnauthorizedException('Sessiya faol emas');
     }
     req.user = user;
+
+    if (String(user.role || '').toUpperCase() === 'PARTNER' && !user.partnerGroupId) {
+      throw new ForbiddenException('Partner guruhi biriktirilmagan');
+    }
 
     const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
     const anyRequired = this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];

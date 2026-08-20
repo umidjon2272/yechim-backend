@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { paged, pagination } from '../common/pagination';
+import { customerScopeWhere, isAdmin, isPartner } from '../common/access';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -97,12 +98,12 @@ export class ActivitiesService {
   private async ensureCustomerAccess(customerId: string, user: any) {
     const role = String(user?.role || '').toUpperCase();
     const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(role) || user.permissions?.includes('customers.viewAll');
-    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(role);
+    if (role === 'PARTNER' && !user?.partnerGroupId) throw new ForbiddenException('Partner guruhi biriktirilmagan');
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: customerId,
         deletedAt: null,
-        ...(canViewAll ? {} : isPartner ? { groups: { some: { id: user.partnerGroupId } } } : { assignedEmployeeId: user.id }),
+        ...(canViewAll ? {} : customerScopeWhere(user)),
       },
       select: { id: true },
     });
@@ -110,7 +111,7 @@ export class ActivitiesService {
   }
 
   private isPartner(user: any) {
-    return Boolean(user?.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(String(user?.role || '').toUpperCase());
+    return isPartner(user);
   }
 
   private canViewComments(user: any) {
@@ -118,7 +119,7 @@ export class ActivitiesService {
   }
 
   private isAdmin(user: any) {
-    return ['ADMIN', 'SUPER_ADMIN'].includes(String(user?.role || '').toUpperCase());
+    return isAdmin(user);
   }
 
   private hideCommentMetadata(metadata: any) {

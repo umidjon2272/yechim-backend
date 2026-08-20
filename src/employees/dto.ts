@@ -30,6 +30,15 @@ export class CreateEmployeeDto {
   role?: string;
 
   @IsOptional()
+  @IsIn(['ALL', 'ASSIGNED', 'GROUPS'])
+  customerVisibility?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  allowedGroupIds?: string[];
+
+  @IsOptional()
   @IsString()
   status?: string;
 

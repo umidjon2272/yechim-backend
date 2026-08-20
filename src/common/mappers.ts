@@ -29,13 +29,22 @@ export function publicUser(user: any, options: { exposePermissions?: boolean } =
     isPartner: partner,
     partnerGroupId: user.partnerGroupId || null,
     partnerGroup: user.partnerGroup ? { id: user.partnerGroup.id, name: user.partnerGroup.name } : null,
+    customerVisibility: user.customerVisibility || 'ASSIGNED',
+    allowedGroupIds: Array.isArray(user.allowedGroupIds)
+      ? user.allowedGroupIds
+      : Array.isArray(user.allowedGroups)
+        ? user.allowedGroups.map((item: any) => item.groupId || item.group?.id).filter(Boolean)
+        : [],
+    allowedGroups: Array.isArray(user.allowedGroups)
+      ? user.allowedGroups.map((item: any) => item.group || { id: item.groupId, name: item.groupName }).filter((item: any) => item?.id)
+      : [],
     team: user.team ? { id: user.team.id, name: user.team.name } : null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
 }
 
-export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean } = {}) {
+export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean } } = {}): any {
   if (!customer) return null;
   const now = Date.now();
   const stageEnteredAt = customer.stageEnteredAt || customer.updatedAt || customer.createdAt;
@@ -57,7 +66,9 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
       stageLabel: customer.stage?.label || customer.stageId,
       isCompleted: Boolean(customer.stage?.isFinal),
       isInstalled: Boolean(customer.stage?.isFinal),
-      rewardAmount: (customer.partnerRewards || []).reduce((sum: number, reward: any) => sum + toNumber(reward.amount), 0),
+      rewardAmount: (customer.partnerRewards || [])
+        .filter((reward: any) => !options.partnerGroupId || reward.groupId === options.partnerGroupId)
+        .reduce((sum: number, reward: any) => sum + toNumber(reward.amount), 0),
     };
   }
   return {
@@ -65,13 +76,13 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     name: customer.name,
     firstName: customer.firstName,
     lastName: customer.lastName,
-    phone: customer.phone,
+    ...(options.fieldVisibility?.phone === false ? {} : { phone: customer.phone }),
     phone2: customer.phone2,
     telegram: customer.telegram,
     email: customer.email,
     service: customer.service,
-    amount: toNumber(customer.amount),
-    depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount),
+    ...(options.fieldVisibility?.amount === false ? {} : { amount: toNumber(customer.amount) }),
+    ...(options.fieldVisibility?.deposit === false ? {} : { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) }),
     currencyId: customer.currencyId || customer.currency?.id || null,
     currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null,
     notes: options.hideInternalNotes ? null : customer.notes,

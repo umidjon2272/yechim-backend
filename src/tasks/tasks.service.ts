@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { taskDto } from '../common/mappers';
+import { customerScopeWhere } from '../common/access';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -181,7 +182,7 @@ export class TasksService {
 
   private async ensureCustomerAccess(customerId: string, user: any) {
     const canViewAll = this.isAdmin(user) || String(user?.role || '').toUpperCase() === 'MANAGER' || user.permissions?.includes('customers.viewAll');
-    const customer = await this.prisma.customer.findFirst({ where: { id: customerId, deletedAt: null, ...(canViewAll ? {} : { assignedEmployeeId: user.id }) }, select: { id: true } });
+    const customer = await this.prisma.customer.findFirst({ where: { AND: [{ id: customerId, deletedAt: null }, canViewAll ? {} : customerScopeWhere(user)] }, select: { id: true } });
     if (!customer) throw new ForbiddenException('Bu mijoz uchun vazifa yaratishga ruxsat yo\'q');
   }
 

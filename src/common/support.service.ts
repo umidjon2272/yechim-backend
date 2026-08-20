@@ -3,6 +3,7 @@ import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
 import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber } from './mappers';
 import { paged, pagination } from './pagination';
 import { PrismaService } from '../prisma/prisma.service';
+import { customerScopeWhere, isPartner } from './access';
 
 @Injectable()
 export class SupportService {
@@ -44,10 +45,9 @@ export class SupportService {
   }
 
   async customerOptions(actor?: any) {
-    const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(String(actor?.role || '').toUpperCase());
-    const partnerGroupId = actor?.partnerGroupId && !isAdmin ? actor.partnerGroupId : null;
-    const canViewAll = isAdmin || String(actor?.role || '').toUpperCase() === 'MANAGER' || actor?.permissions?.includes('customers.viewAll');
-    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, ...(canViewAll ? {} : partnerGroupId ? { groups: { some: { id: partnerGroupId } } } : { assignedEmployeeId: actor?.id }) } });
+    const partnerGroupId = isPartner(actor) ? actor.partnerGroupId : null;
+    const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(actor?.role || '').toUpperCase()) || actor?.permissions?.includes('customers.viewAll');
+    const customers = await this.prisma.customer.findMany({ where: { AND: [{ deletedAt: null }, canViewAll ? {} : customerScopeWhere(actor)] } });
     const stages = await this.prisma.stage.findMany({ orderBy: { order: 'asc' } });
     const cities = new Set<string>();
     const programs = new Set<string>();
@@ -341,7 +341,7 @@ export class SupportService {
   }
 
   async messages(customerId: string, actor?: any) {
-    if (actor?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(String(actor.role || '').toUpperCase())) {
+    if (isPartner(actor)) {
       throw new ForbiddenException('Partner ichki yozishmalarni ko\'ra olmaydi');
     }
     const items = await this.prisma.message.findMany({ where: { customerId }, orderBy: { createdAt: 'asc' } });

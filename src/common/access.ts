@@ -9,7 +9,7 @@ export function isAdmin(user?: any) {
 }
 
 export function isPartner(user?: any) {
-  return Boolean(user?.partnerGroupId) && !isAdmin(user);
+  return roleOf(user) === 'PARTNER' && Boolean(user?.partnerGroupId);
 }
 
 export function partnerGroupIdOf(user?: any) {
@@ -22,7 +22,20 @@ export function canViewAll(user: any, permission = 'customers.viewAll') {
 
 export function customerScopeWhere(user: any) {
   const partnerGroupId = partnerGroupIdOf(user);
-  if (isAdmin(user) || roleOf(user) === 'MANAGER' || user?.permissions?.includes('customers.viewAll')) return {};
+  const role = roleOf(user);
+  if (isAdmin(user) || role === 'MANAGER' || user?.permissions?.includes('customers.viewAll')) return {};
   if (partnerGroupId) return { groups: { some: { id: partnerGroupId } } };
+  if (role === 'EMPLOYEE') {
+    const visibility = String(user?.customerVisibility || 'ASSIGNED').toUpperCase();
+    if (visibility === 'ALL') return {};
+    if (visibility === 'GROUPS') {
+      const allowedGroupIds = Array.isArray(user?.allowedGroupIds)
+        ? user.allowedGroupIds
+        : Array.isArray(user?.allowedGroups)
+          ? user.allowedGroups.map((item: any) => item.groupId || item.group?.id).filter(Boolean)
+          : [];
+      return allowedGroupIds.length ? { groups: { some: { id: { in: allowedGroupIds } } } } : { id: '__no_allowed_group__' };
+    }
+  }
   return { assignedEmployeeId: user?.id };
 }

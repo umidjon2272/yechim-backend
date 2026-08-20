@@ -16,6 +16,13 @@ enum Role {
   INSTALLER
   DEVELOPER
   EMPLOYEE
+  PARTNER
+}
+
+enum EmployeeCustomerVisibility {
+  ALL
+  ASSIGNED
+  GROUPS
 }
 
 enum TaskStatus {
@@ -41,6 +48,7 @@ model User {
   passwordHash     String
   role             Role           @default(EMPLOYEE)
   permissions      String[]       @default([])
+  customerVisibility EmployeeCustomerVisibility @default(ASSIGNED)
   status           String         @default("active")
   isActive         Boolean        @default(true)
   avatarUrl        String?
@@ -48,6 +56,7 @@ model User {
   team             Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   partnerGroupId   String?
   partnerGroup     CustomerGroup? @relation("PartnerGroupUsers", fields: [partnerGroupId], references: [id], onDelete: SetNull)
+  allowedGroups    UserAllowedGroup[]
 
   assignedCustomers  Customer[]     @relation("AssignedCustomers")
   installerCustomers Customer[]     @relation("CustomerInstallers")
@@ -68,6 +77,7 @@ model User {
   @@index([role])
   @@index([status])
   @@index([partnerGroupId])
+  @@index([customerVisibility])
 }
 
 model UserSession {
@@ -111,6 +121,7 @@ model Stage {
   pipelineId String
   pipeline   Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   customers  Customer[]
+  rewardGroups CustomerGroup[] @relation("GroupRewardStage")
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
@@ -199,11 +210,27 @@ model CustomerGroup {
   id                       String          @id @default(cuid())
   name                     String          @unique
   partnerRewardPerCustomer Decimal?
+  rewardStageId            String?
+  rewardStage              Stage?          @relation("GroupRewardStage", fields: [rewardStageId], references: [id], onDelete: SetNull)
   customers                Customer[]      @relation("CustomerGroups")
   partnerUsers             User[]          @relation("PartnerGroupUsers")
+  allowedEmployees         UserAllowedGroup[]
   partnerRewards           PartnerReward[]
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
+
+  @@index([rewardStageId])
+}
+
+model UserAllowedGroup {
+  userId    String
+  groupId   String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group     CustomerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+
+  @@id([userId, groupId])
+  @@index([groupId])
 }
 
 model PartnerReward {

@@ -19,13 +19,13 @@ export class EmployeesService {
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({ where, include: { team: true, partnerGroup: true }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
-    return paged(users.map((u) => publicUser(u)), total, page, pageSize);
+    return paged(users.map((u) => publicUser(u, { exposePermissions: true })), total, page, pageSize);
   }
 
   async get(id: string) {
     const user = await this.prisma.user.findUnique({ where: { id }, include: { team: true, partnerGroup: true } });
     if (!user) throw new NotFoundException('Xodim topilmadi');
-    return publicUser(user);
+    return publicUser(user, { exposePermissions: true });
   }
 
   async create(body: any, actor?: any) {
@@ -57,7 +57,7 @@ export class EmployeesService {
         include: { team: true, partnerGroup: true },
       });
       const loginUrl = `${String(process.env.FRONTEND_URL || 'https://yechim-crm.vercel.app').split(',')[0].trim().replace(/\/$/, '')}/login`;
-      return { employee: publicUser(user), credentials: { login: username, password }, loginUrl };
+      return { employee: publicUser(user, { exposePermissions: true }), credentials: { login: username, password }, loginUrl };
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException(this.uniqueMessage(error));
       throw error;
@@ -92,12 +92,12 @@ export class EmployeesService {
             avatarUrl: body.avatarUrl,
           };
       Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
-      if (data.permissions !== undefined) data.permissions = this.sanitizePermissions(data.permissions);
+      if (data.permissions !== undefined) data.permissions = this.normalizePermissions(data.permissions);
       if (data.role !== undefined && !['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES', 'SUPPORT', 'INSTALLER', 'DEVELOPER', 'EMPLOYEE'].includes(String(data.role).toUpperCase())) delete data.role;
       const user = await this.prisma.user.update({ where: { id }, data, include: { team: true, partnerGroup: true } });
       if (data.username !== undefined) await this.revokeSessions(id);
       if (data.status === 'inactive' || data.isActive === false) await this.revokeSessions(id);
-      return publicUser(user);
+      return publicUser(user, { exposePermissions: true });
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException(this.uniqueMessage(error));
       throw error;
@@ -111,10 +111,10 @@ export class EmployeesService {
 
     const updated = await this.prisma.user.update({
       where: { id },
-      data: { permissions: this.sanitizePermissions(permissions) },
+      data: { permissions: this.normalizePermissions(permissions) },
       include: { team: true, partnerGroup: true },
     });
-    return publicUser(updated);
+    return publicUser(updated, { exposePermissions: true });
   }
 
   async setStatus(id: string, status: string, actor?: any) {
@@ -125,7 +125,7 @@ export class EmployeesService {
       include: { team: true, partnerGroup: true },
     });
     if (status !== 'active') await this.revokeSessions(id);
-    return publicUser(user);
+    return publicUser(user, { exposePermissions: true });
   }
 
   async resetPassword(id: string, password: string, actor?: any) {
@@ -149,7 +149,7 @@ export class EmployeesService {
         include: { team: true, partnerGroup: true },
       });
       await this.revokeSessions(id);
-      return publicUser(user);
+      return publicUser(user, { exposePermissions: true });
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException(this.uniqueMessage(error));
       throw error;
@@ -195,6 +195,14 @@ export class EmployeesService {
   private sanitizePermissions(value: any) {
     if (!Array.isArray(value)) return [];
     return [...new Set(value.filter((permission) => ALL_PERMISSIONS.includes(permission)))];
+  }
+
+  private normalizePermissions(value: any) {
+    if (!Array.isArray(value)) throw new BadRequestException('Ruxsatlar massivi noto\'g\'ri');
+    const permissions = [...new Set(value)];
+    const invalid = permissions.filter((permission) => !ALL_PERMISSIONS.includes(permission));
+    if (invalid.length) throw new BadRequestException(`Noma'lum ruxsat: ${invalid.join(', ')}`);
+    return permissions;
   }
 
   private revokeSessions(userId: string) {

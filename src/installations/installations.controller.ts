@@ -9,25 +9,25 @@ type AuthRequest = Request & { user?: any };
 export class InstallationsController {
   constructor(private readonly installations: InstallationsService) {}
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('installations.view')
   @Get()
   list(@Query() query: any, @Req() req: AuthRequest) {
     return this.installations.list(query, req.user);
   }
 
-  @RequirePermissions('customers.view')
+  @RequirePermissions('installations.view')
   @Get(':id')
   get(@Param('id') id: string, @Req() req: AuthRequest) {
     return this.installations.get(id, req.user);
   }
 
-  @RequirePermissions('customers.edit')
+  @RequirePermissions('installations.create')
   @Post()
   create(@Body() body: any, @Req() req: AuthRequest) {
     return this.installations.create(body, req.user);
   }
 
-  @RequirePermissions('customers.edit')
+  @RequirePermissions('installations.edit')
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: any, @Req() req: AuthRequest) {
     return this.installations.update(id, body, req.user);

@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
-import { IsArray, IsEmail, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { ArrayUnique, IsArray, IsEmail, IsIn, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { ALL_PERMISSIONS } from '../common/defaults';
 
 export class CreateEmployeeDto {
   @IsString({ message: 'Ism kiritilishi shart' })
@@ -47,6 +48,8 @@ export class CreateEmployeeDto {
 
 export class UpdateEmployeePermissionsDto {
   @IsArray()
+  @ArrayUnique()
   @IsString({ each: true })
+  @IsIn(ALL_PERMISSIONS, { each: true })
   permissions: string[];
 }

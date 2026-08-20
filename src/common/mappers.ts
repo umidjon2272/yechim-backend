@@ -10,17 +10,19 @@ export function toNumber(value: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function publicUser(user: any) {
+export function publicUser(user: any, options: { exposePermissions?: boolean } = {}) {
   if (!user) return null;
   const partner = isPartner(user);
+  const login = user.username || user.login || user.email || user.phone || null;
   return {
     id: user.id,
     name: user.name,
     email: user.email,
-    username: user.username,
+    username: login,
+    login,
     phone: user.phone,
     role: user.role,
-    permissions: partner ? ['customers.view'] : user.permissions || [],
+    permissions: partner && !options.exposePermissions ? ['customers.view'] : user.permissions || [],
     status: user.status,
     isActive: user.isActive !== false,
     avatarUrl: user.avatarUrl,

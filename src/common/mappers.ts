@@ -44,7 +44,7 @@ export function publicUser(user: any, options: { exposePermissions?: boolean } =
   };
 }
 
-export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean } } = {}): any {
+export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean; financial?: boolean } } = {}): any {
   if (!customer) return null;
   const now = Date.now();
   const stageEnteredAt = customer.stageEnteredAt || customer.updatedAt || customer.createdAt;
@@ -81,10 +81,10 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     telegram: customer.telegram,
     email: customer.email,
     service: customer.service,
-    ...(options.fieldVisibility?.amount === false ? {} : { amount: toNumber(customer.amount) }),
-    ...(options.fieldVisibility?.deposit === false ? {} : { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) }),
-    currencyId: customer.currencyId || customer.currency?.id || null,
-    currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null,
+    ...(options.fieldVisibility?.financial === false || options.fieldVisibility?.amount === false ? {} : { amount: toNumber(customer.amount) }),
+    ...(options.fieldVisibility?.financial === false || options.fieldVisibility?.deposit === false ? {} : { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) }),
+    ...(options.fieldVisibility?.financial === false ? {} : { currencyId: customer.currencyId || customer.currency?.id || null }),
+    ...(options.fieldVisibility?.financial === false ? {} : { currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null }),
     notes: options.hideInternalNotes ? null : customer.notes,
     note: options.hideInternalNotes ? null : customer.note,
     address: customer.address ?? null,
@@ -132,47 +132,54 @@ export function businessDto(business: any) {
   };
 }
 
-export function leadDto(lead: any) {
+export function leadDto(lead: any, options: { hideFinancials?: boolean } = {}) {
   if (!lead) return null;
+  const { expectedValue, ...safeLead } = lead;
   return {
-    ...lead,
-    expectedValue: toNumber(lead.expectedValue),
+    ...safeLead,
+    ...(options.hideFinancials ? {} : { expectedValue: toNumber(expectedValue) }),
     customer: lead.customer ? { id: lead.customer.id, name: lead.customer.name } : null,
     business: lead.business ? { id: lead.business.id, name: lead.business.name } : null,
     assignedEmployee: lead.assignedEmployeeId ? { id: lead.assignedEmployeeId } : null,
   };
 }
 
-export function dealDto(deal: any) {
+export function dealDto(deal: any, options: { hideFinancials?: boolean } = {}) {
   if (!deal) return null;
+  const { value, ...safeDeal } = deal;
   return {
-    ...deal,
-    value: toNumber(deal.value),
+    ...safeDeal,
+    ...(options.hideFinancials ? {} : { value: toNumber(value) }),
     customer: deal.customer ? { id: deal.customer.id, name: deal.customer.name } : null,
     business: deal.business ? { id: deal.business.id, name: deal.business.name } : null,
     salesEmployee: publicUser(deal.salesEmployee),
   };
 }
 
-export function dealItemDto(item: any) {
-  return { ...item, unitPrice: toNumber(item.unitPrice), discount: toNumber(item.discount), total: toNumber(item.total) };
+export function dealItemDto(item: any, options: { hideFinancials?: boolean } = {}) {
+  const { unitPrice, discount, total, ...safeItem } = item;
+  return {
+    ...safeItem,
+    ...(options.hideFinancials ? {} : { unitPrice: toNumber(unitPrice), discount: toNumber(discount), total: toNumber(total) }),
+  };
 }
 
-export function paymentDto(payment: any) {
+export function paymentDto(payment: any, options: { hideFinancials?: boolean } = {}) {
+  const { amount, ...safePayment } = payment;
   return {
-    ...payment,
-    amount: toNumber(payment.amount),
-    deal: payment.deal ? { id: payment.deal.id, name: payment.deal.name } : null,
-    customer: payment.customer || null,
-    business: payment.business || null,
+    ...safePayment,
+    ...(options.hideFinancials ? {} : { amount: toNumber(amount) }),
+    deal: payment.deal ? dealDto(payment.deal, options) : null,
+    customer: payment.customer ? { id: payment.customer.id, name: payment.customer.name } : null,
+    business: payment.business ? { id: payment.business.id, name: payment.business.name } : null,
     employee: publicUser(payment.employee),
   };
 }
 
-export function installationDto(item: any) {
+export function installationDto(item: any, options: { hideFinancials?: boolean } = {}) {
   return {
     ...item,
-    deal: item.deal ? { id: item.deal.id, name: item.deal.name } : null,
+    deal: item.deal ? dealDto(item.deal, options) : null,
     customer: item.customer ? { id: item.customer.id, name: item.customer.name } : null,
     business: item.business ? { id: item.business.id, name: item.business.name } : null,
     assignedEmployee: publicUser(item.assignedEmployee),

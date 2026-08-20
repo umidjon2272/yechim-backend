@@ -59,9 +59,11 @@ export class PipelinesService {
       ]);
       return this.stages(stage.pipelineId);
     }
-    this.assertMutable(stage);
     const label = String(body.name || body.label || '').trim();
     if (!label) throw new BadRequestException('Bosqich nomi bo\'sh bo\'lishi mumkin emas');
+    if (this.isSystemStage(stage) && typeof body.isFinal === 'boolean' && body.isFinal !== stage.isFinal) {
+      throw new BadRequestException('Tizim bosqichining yakuniy holatini o\'zgartirib bo\'lmaydi');
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       if (body.isFinal === true) await tx.stage.updateMany({ where: { pipelineId: stage.pipelineId }, data: { isFinal: false } });
       return tx.stage.update({ where: { id }, data: { label, ...(typeof body.isFinal === 'boolean' ? { isFinal: body.isFinal } : {}) } });

@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { DEFAULT_PIPELINE_NAME } from '../common/defaults';
-import { canViewAll, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
+import { canViewAll, canViewFinancials, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
 import { customerDto, uniqueConflict } from '../common/mappers';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
@@ -56,7 +56,6 @@ export class CustomersService {
       customers = customers.filter((c) => [c.name, c.phone, c.email].filter(Boolean).some((v) => String(v).toLowerCase().includes(search)));
     }
     if (query.city) customers = customers.filter((c) => (c.address as any)?.city === query.city);
-    if (query.program) customers = customers.filter((c) => c.service === query.program || (Array.isArray(c.programs) && c.programs.some((p: any) => p.name === query.program)));
     const sort = String(query.sort || '-createdAt');
     customers.sort((a: any, b: any) => {
       if (sort === 'nextContactAt') return this.contactOrder(a, b);
@@ -89,7 +88,7 @@ export class CustomersService {
     const stageId = await this.resolveStageId(body.stageId ?? body.stage ?? 'NEW');
     const programs = this.normalizePrograms(body.programs);
     const requestedGroupIds = await this.resolveCreateGroupIds(body, actor);
-    const currencyId = await this.resolveCurrencyId(body.currencyId, body.currencyCode);
+    const currencyId = canViewFinancials(actor) ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : null;
     try {
       const customer = await this.prisma.customer.create({
         data: {
@@ -142,6 +141,9 @@ export class CustomersService {
 
   async update(id: string, body: any, actor?: any) {
     this.ensurePartnerCannotWrite(actor);
+    if (!canViewFinancials(actor) && ['amount', 'depositAmount', 'currencyId', 'currencyCode'].some((field) => body[field] !== undefined)) {
+      throw new ForbiddenException('Moliyaviy ma\'lumotlarni o\'zgartirishga ruxsat yo\'q');
+    }
     const current: any = await this.get(id, actor);
     const requestedStage = body.stageId ?? body.stage;
     const nextStageId = requestedStage ? await this.resolveStageId(requestedStage) : undefined;
@@ -320,16 +322,13 @@ export class CustomersService {
   async filterOptions(actor?: any) {
     const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, ...customerScopeWhere(actor) } });
     const cities = new Set<string>();
-    const programs = new Set<string>();
     const stageCounts: Record<string, number> = {};
     customers.forEach((c) => {
       const city = (c.address as any)?.city;
       if (city) cities.add(city);
-      if (c.service) programs.add(c.service);
-      if (Array.isArray(c.programs)) c.programs.forEach((p: any) => p.name && programs.add(p.name));
       stageCounts[c.stageId] = (stageCounts[c.stageId] || 0) + 1;
     });
-    return { cities: [...cities], programs: [...programs], stageCounts };
+    return { cities: [...cities], stageCounts };
   }
 
   private canViewAll(actor?: any) {
@@ -346,6 +345,7 @@ export class CustomersService {
         phone: this.canViewField(actor, 'phone'),
         amount: this.canViewField(actor, 'amount'),
         deposit: this.canViewField(actor, 'deposit'),
+        financial: canViewFinancials(actor),
       },
     });
   }
@@ -357,6 +357,8 @@ export class CustomersService {
   private canViewField(actor: any, field: 'phone' | 'amount' | 'deposit') {
     if (!actor || isAdmin(actor)) return true;
     if (isPartner(actor)) return field === 'phone';
+    if ((field === 'amount' || field === 'deposit') && !canViewFinancials(actor)) return false;
+    if ((field === 'amount' || field === 'deposit') && actor.permissions?.includes('customers.viewFinancials')) return true;
     const permission = field === 'phone' ? 'customers.viewPhone' : field === 'amount' ? 'customers.viewAmount' : 'customers.viewDeposit';
     return actor.permissions?.includes(permission) || actor.permissions?.includes(`${field}.view`);
   }

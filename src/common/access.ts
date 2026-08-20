@@ -20,6 +20,21 @@ export function canViewAll(user: any, permission = 'customers.viewAll') {
   return isAdmin(user) || ['MANAGER'].includes(roleOf(user)) || user?.permissions?.includes(permission);
 }
 
+export function canViewFinancials(user?: any) {
+  if (isAdmin(user)) return true;
+  if (!user || roleOf(user) === 'PARTNER') return false;
+  const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+  // Keep legacy granular permissions working for already configured users;
+  // the new master permission grants all customer financial fields at once.
+  return permissions.includes('customers.viewFinancials') || [
+    'customers.viewAmount',
+    'customers.viewDeposit',
+    'customers.viewPipelineTotal',
+    'amount.view',
+    'deposit.view',
+  ].some((permission) => permissions.includes(permission));
+}
+
 export function customerScopeWhere(user: any) {
   const partnerGroupId = partnerGroupIdOf(user);
   const role = roleOf(user);

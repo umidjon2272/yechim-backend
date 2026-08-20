@@ -3,7 +3,7 @@ import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
 import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber } from './mappers';
 import { paged, pagination } from './pagination';
 import { PrismaService } from '../prisma/prisma.service';
-import { customerScopeWhere, isAdmin, isPartner } from './access';
+import { canViewFinancials, customerScopeWhere, isAdmin, isPartner } from './access';
 
 @Injectable()
 export class SupportService {
@@ -47,21 +47,18 @@ export class SupportService {
   async customerOptions(actor?: any) {
     const partnerGroupId = isPartner(actor) ? actor.partnerGroupId : null;
     const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(actor?.role || '').toUpperCase()) || actor?.permissions?.includes('customers.viewAll');
-    const canViewPipelineTotal = isAdmin(actor) || actor?.permissions?.includes('customers.viewPipelineTotal');
+    const canViewPipelineTotal = canViewFinancials(actor) && (isAdmin(actor) || actor?.permissions?.includes('customers.viewPipelineTotal') || actor?.permissions?.includes('customers.viewFinancials'));
     const customers = await this.prisma.customer.findMany({
       where: { AND: [{ deletedAt: null }, canViewAll ? {} : customerScopeWhere(actor)] },
       include: { currency: true },
     });
     const stages = await this.prisma.stage.findMany({ orderBy: { order: 'asc' } });
     const cities = new Set<string>();
-    const programs = new Set<string>();
     const stageCounts: Record<string, number> = {};
     const stageTotals: Record<string, Record<string, { currency: any; amount: number }>> = {};
     customers.forEach((c) => {
       const city = (c.address as any)?.city;
       if (city) cities.add(city);
-      if (c.service) programs.add(c.service);
-      if (Array.isArray(c.programs)) c.programs.forEach((p: any) => p.name && programs.add(p.name));
       stageCounts[c.stageId] = (stageCounts[c.stageId] || 0) + 1;
       if (canViewPipelineTotal) {
         const currency = c.currency || { id: null, code: 'UZS', symbol: "so'm" };
@@ -73,7 +70,6 @@ export class SupportService {
     });
     const response: any = {
       cities: partnerGroupId ? [] : [...cities],
-      programs: partnerGroupId ? [] : [...programs],
       stageCounts,
       stages: stages.map((s) => ({ id: s.id, label: s.label })),
     };
@@ -171,7 +167,7 @@ export class SupportService {
     return this.prisma.business.update({ where: { id }, data: body, include: { customer: true } }).then(businessDto);
   }
 
-  async leads(query: any) {
+  async leads(query: any, actor?: any) {
     const { page, pageSize, skip, take } = pagination(query);
     const where: any = {};
     if (query.customerId) where.customerId = query.customerId;
@@ -180,13 +176,13 @@ export class SupportService {
       this.prisma.lead.count({ where }),
       this.prisma.lead.findMany({ where, include: { customer: true, business: true }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
-    return paged(items.map(leadDto), total, page, pageSize);
+    return paged(items.map((item) => leadDto(item, { hideFinancials: !canViewFinancials(actor) })), total, page, pageSize);
   }
 
-  lead(id: string) {
+  lead(id: string, actor?: any) {
     return this.prisma.lead.findUnique({ where: { id }, include: { customer: true, business: true } }).then((item) => {
       if (!item) throw new NotFoundException('Murojaat topilmadi');
-      return leadDto(item);
+      return leadDto(item, { hideFinancials: !canViewFinancials(actor) });
     });
   }
 
@@ -221,7 +217,7 @@ export class SupportService {
     return { id: deal.id, dealId: deal.id };
   }
 
-  async deals(query: any) {
+  async deals(query: any, actor?: any) {
     const { page, pageSize, skip, take } = pagination(query);
     const where: any = {};
     if (query.customerId) where.customerId = query.customerId;
@@ -230,13 +226,13 @@ export class SupportService {
       this.prisma.deal.count({ where }),
       this.prisma.deal.findMany({ where, include: { customer: true, business: true, salesEmployee: { include: { team: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
-    return paged(items.map(dealDto), total, page, pageSize);
+    return paged(items.map((item) => dealDto(item, { hideFinancials: !canViewFinancials(actor) })), total, page, pageSize);
   }
 
-  deal(id: string) {
+  deal(id: string, actor?: any) {
     return this.prisma.deal.findUnique({ where: { id }, include: { customer: true, business: true, salesEmployee: { include: { team: true } } } }).then((item) => {
       if (!item) throw new NotFoundException('Savdo topilmadi');
-      return dealDto(item);
+      return dealDto(item, { hideFinancials: !canViewFinancials(actor) });
     });
   }
 
@@ -259,9 +255,9 @@ export class SupportService {
     return this.prisma.deal.update({ where: { id }, data: { ...body, value: body.value == null ? undefined : Number(body.value) }, include: { customer: true, business: true, salesEmployee: { include: { team: true } } } }).then(dealDto);
   }
 
-  async dealItems(dealId: string) {
+  async dealItems(dealId: string, actor?: any) {
     const items = await this.prisma.dealItem.findMany({ where: { dealId }, orderBy: { createdAt: 'asc' } });
-    return { items: items.map(dealItemDto), total: items.length };
+    return { items: items.map((item) => dealItemDto(item, { hideFinancials: !canViewFinancials(actor) })), total: items.length };
   }
 
   async createDealItem(dealId: string, body: any) {
@@ -287,7 +283,7 @@ export class SupportService {
     return { ok: true };
   }
 
-  async payments(query: any) {
+  async payments(query: any, actor?: any) {
     const { page, pageSize, skip, take } = pagination(query);
     const where: any = {};
     if (query.dealId) where.dealId = query.dealId;
@@ -298,16 +294,17 @@ export class SupportService {
       this.prisma.payment.count({ where }),
       this.prisma.payment.findMany({ where, include: { deal: true, employee: { include: { team: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
-    return paged(items.map(paymentDto), total, page, pageSize);
+    return paged(items.map((item) => paymentDto(item, { hideFinancials: !canViewFinancials(actor) })), total, page, pageSize);
   }
 
-  async payment(id: string) {
+  async payment(id: string, actor?: any) {
     const item = await this.prisma.payment.findUnique({ where: { id }, include: { deal: true, employee: { include: { team: true } } } });
     if (!item) throw new NotFoundException("To'lov topilmadi");
-    return paymentDto(item);
+    return paymentDto(item, { hideFinancials: !canViewFinancials(actor) });
   }
 
   async createPayment(body: any, user: any) {
+    if (!canViewFinancials(user)) throw new ForbiddenException('Moliyaviy ma\'lumotlar bilan ishlashga ruxsat yo\'q');
     const deal = await this.prisma.deal.findUnique({ where: { id: body.dealId }, include: { customer: true, business: true } });
     if (!deal) throw new NotFoundException('Savdo topilmadi');
     const payment = await this.prisma.payment.create({
@@ -327,7 +324,7 @@ export class SupportService {
     return paymentDto(payment);
   }
 
-  async installations(query: any) {
+  async installations(query: any, actor?: any) {
     const { page, pageSize, skip, take } = pagination(query);
     const where: any = {};
     if (query.dealId) where.dealId = query.dealId;
@@ -338,16 +335,16 @@ export class SupportService {
       this.prisma.installation.count({ where }),
       this.prisma.installation.findMany({ where, include: { customer: true, business: true, deal: true, assignedEmployee: { include: { team: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
-    return paged(items.map(installationDto), total, page, pageSize);
+    return paged(items.map((item) => installationDto(item, { hideFinancials: !canViewFinancials(actor) })), total, page, pageSize);
   }
 
-  async installation(id: string) {
+  async installation(id: string, actor?: any) {
     const item = await this.prisma.installation.findUnique({
       where: { id },
       include: { customer: true, business: true, deal: true, assignedEmployee: { include: { team: true } } },
     });
     if (!item) throw new NotFoundException("O'rnatish topilmadi");
-    return installationDto(item);
+    return installationDto(item, { hideFinancials: !canViewFinancials(actor) });
   }
 
   createInstallation(body: any) {

@@ -1,4 +1,5 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { StatisticsService } from './statistics.service';
 
@@ -8,8 +9,8 @@ export class StatisticsController {
 
   @RequirePermissions('dashboard.view')
   @Get('dashboard-summary')
-  dashboard() {
-    return this.statistics.dashboardSummary();
+  dashboard(@Req() req: Request & { user?: any }) {
+    return this.statistics.dashboardSummary(req.user);
   }
 
   @RequirePermissions('dashboard.view')
@@ -26,8 +27,8 @@ export class StatisticsController {
 
   @RequirePermissions('profit.view')
   @Get('revenue')
-  revenue() {
-    return this.statistics.revenue();
+  revenue(@Req() req: Request & { user?: any }) {
+    return this.statistics.revenue(req.user);
   }
 
   @RequirePermissions('dashboard.view')
@@ -38,7 +39,7 @@ export class StatisticsController {
 
   @RequirePermissions('employees.view')
   @Get('employee-performance/:id')
-  employeePerformance(@Param('id') id: string) {
-    return this.statistics.employeePerformance(id);
+  employeePerformance(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.statistics.employeePerformance(id, req.user);
   }
 }

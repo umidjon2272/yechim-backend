@@ -81,6 +81,13 @@ const hiddenEmployeeCustomer = customerDto(
 );
 assert.equal('amount' in hiddenEmployeeCustomer, false, 'employee amount field is removed from DTO');
 assert.equal('depositAmount' in hiddenEmployeeCustomer, false, 'employee deposit field is removed from DTO');
+const hiddenFinancialCustomer = customerDto(
+  { ...customer, amount: 100, depositAmount: 20, currencyId: 'currency-uzs', currency: { id: 'currency-uzs', code: 'UZS', symbol: "so'm" } },
+  { fieldVisibility: { financial: false, amount: true, deposit: true } },
+);
+assert.equal('amount' in hiddenFinancialCustomer, false, 'financial master permission removes amount');
+assert.equal('depositAmount' in hiddenFinancialCustomer, false, 'financial master permission removes deposit');
+assert.equal('currency' in hiddenFinancialCustomer, false, 'financial master permission removes currency');
 
 let customerOptionsWhere: any;
 const supportService = new SupportService({
@@ -97,6 +104,8 @@ assert.deepEqual(customerOptionsWhere.AND[1].groups, { some: { id: { in: ['group
 assert.equal('stageTotals' in scopedOptions, false, 'pipeline totals are omitted without the dedicated permission');
 const permittedOptions = await supportService.customerOptions({ role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'], permissions: ['customers.viewPipelineTotal'] });
 assert.equal(permittedOptions.stageTotals.NEW[0].amount, 250, 'pipeline totals are returned only with the dedicated permission');
+const masterFinancialOptions = await supportService.customerOptions({ role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'], permissions: ['customers.viewFinancials'] });
+assert.equal(masterFinancialOptions.stageTotals.NEW[0].amount, 250, 'financial master permission exposes pipeline total');
 
 const employeeService = new EmployeesService({} as any);
 const adminActor = { id: 'admin-1', role: 'ADMIN' };

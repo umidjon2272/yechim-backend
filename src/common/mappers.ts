@@ -56,6 +56,8 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
   const tomorrowStart = todayStart + 86400000;
   const latestNote = customer.activities?.[0] || (customer.note || customer.notes ? { id: null, message: customer.note || customer.notes, createdAt: customer.updatedAt || customer.createdAt, createdBy: null } : null);
   const groups = customer.groups || [];
+  const showAmount = options.fieldVisibility?.financial !== false && options.fieldVisibility?.amount !== false;
+  const showDeposit = options.fieldVisibility?.financial !== false && options.fieldVisibility?.deposit !== false;
   if (options.partner) {
     return {
       id: customer.id,
@@ -81,10 +83,10 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     telegram: customer.telegram,
     email: customer.email,
     service: customer.service,
-    ...(options.fieldVisibility?.financial === false || options.fieldVisibility?.amount === false ? {} : { amount: toNumber(customer.amount) }),
-    ...(options.fieldVisibility?.financial === false || options.fieldVisibility?.deposit === false ? {} : { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) }),
-    ...(options.fieldVisibility?.financial === false ? {} : { currencyId: customer.currencyId || customer.currency?.id || null }),
-    ...(options.fieldVisibility?.financial === false ? {} : { currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null }),
+    ...(showAmount ? { amount: toNumber(customer.amount) } : {}),
+    ...(showDeposit ? { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) } : {}),
+    ...(showAmount ? { currencyId: customer.currencyId || customer.currency?.id || null } : {}),
+    ...(showAmount ? { currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null } : {}),
     businessTypeId: customer.businessTypeId || customer.businessType?.id || null,
     businessType: customer.businessType ? { id: customer.businessType.id, name: customer.businessType.name, isActive: customer.businessType.isActive } : null,
     notes: options.hideInternalNotes ? null : customer.notes,

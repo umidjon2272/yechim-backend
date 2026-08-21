@@ -10,6 +10,15 @@
 // IMPORTANT: this is still the mock/demo backend. Data lives in the function's
 // in-memory state, which is NOT guaranteed to persist between invocations on
 // Vercel. It is not a substitute for a real backend with a real database.
-const app = require('../mock-server/app.js')
+const LEGACY_API_ENABLED = process.env.ENABLE_LEGACY_DEMO_API === 'true'
+const app = LEGACY_API_ENABLED ? require('../mock-server/app.js') : null
 
-module.exports = (req, res) => app(req, res)
+module.exports = (req, res) => {
+  if (!LEGACY_API_ENABLED) {
+    res.statusCode = 410
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ message: 'Legacy demo API disabled' }))
+    return
+  }
+  return app(req, res)
+}

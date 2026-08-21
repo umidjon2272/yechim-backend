@@ -3,7 +3,7 @@ import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
 import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber, uniqueConflict } from './mappers';
 import { paged, pagination } from './pagination';
 import { PrismaService } from '../prisma/prisma.service';
-import { canViewFinancials, customerScopeWhere, isAdmin, isPartner } from './access';
+import { canViewCustomerPipelineTotal, canViewFinancials, customerScopeWhere, isAdmin, isPartner } from './access';
 
 @Injectable()
 export class SupportService {
@@ -47,7 +47,7 @@ export class SupportService {
   async customerOptions(actor?: any) {
     const partnerGroupId = isPartner(actor) ? actor.partnerGroupId : null;
     const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(String(actor?.role || '').toUpperCase()) || actor?.permissions?.includes('customers.viewAll');
-    const canViewPipelineTotal = canViewFinancials(actor) && (isAdmin(actor) || actor?.permissions?.includes('customers.viewPipelineTotal') || actor?.permissions?.includes('customers.viewFinancials'));
+    const canViewPipelineTotal = canViewCustomerPipelineTotal(actor);
     const customers = await this.prisma.customer.findMany({
       where: { AND: [{ deletedAt: null }, canViewAll ? {} : customerScopeWhere(actor)] },
       include: { currency: true },
@@ -103,6 +103,34 @@ export class SupportService {
       if (uniqueConflict(error)) throw new ConflictException('Bu biznes turi allaqachon mavjud');
       throw error;
     }
+  }
+
+  async deleteBusinessType(id: string, actor?: any) {
+    if (!isAdmin(actor)) throw new ForbiddenException('Biznes turini faqat admin o\'chira oladi');
+
+    return this.prisma.$transaction(async (tx) => {
+      const item = await tx.businessType.findUnique({
+        where: { id },
+        include: { _count: { select: { customers: true } } },
+      });
+      if (!item) throw new NotFoundException('Biznes turi topilmadi');
+
+      if (item._count.customers > 0) {
+        const deactivated = await tx.businessType.update({
+          where: { id },
+          data: { isActive: false },
+        });
+        return {
+          ok: true,
+          action: 'deactivated',
+          item: deactivated,
+          customerCount: item._count.customers,
+        };
+      }
+
+      await tx.businessType.delete({ where: { id } });
+      return { ok: true, action: 'deleted', id };
+    });
   }
 
   async fieldDefs(query: any) {

@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { DEFAULT_PIPELINE_NAME } from '../common/defaults';
-import { canEditCustomerCore, canViewAll, canViewFinancials, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
+import { canEditCustomerCore, canViewAll, canViewCustomerAmount, canViewCustomerDeposit, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
 import { customerDto, uniqueConflict } from '../common/mappers';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
@@ -98,7 +98,7 @@ export class CustomersService {
     const stageId = await this.resolveStageId(body.stageId ?? body.stage ?? 'NEW');
     const programs = this.normalizePrograms(body.programs);
     const requestedGroupIds = await this.resolveCreateGroupIds(body, actor);
-    const currencyId = canViewFinancials(actor) ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : null;
+    const currencyId = canViewCustomerAmount(actor) ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : null;
     try {
       const customer = await this.prisma.customer.create({
         data: {
@@ -162,7 +162,13 @@ export class CustomersService {
   async update(id: string, body: any, actor?: any) {
     this.ensurePartnerCannotWrite(actor);
     this.ensureCoreEdit(body, actor);
-    if (!canViewFinancials(actor) && ['amount', 'depositAmount', 'currencyId', 'currencyCode'].some((field) => body[field] !== undefined)) {
+    const financialWriteFields = [
+      ['amount', canViewCustomerAmount(actor)],
+      ['currencyId', canViewCustomerAmount(actor)],
+      ['currencyCode', canViewCustomerAmount(actor)],
+      ['depositAmount', canViewCustomerDeposit(actor)],
+    ] as const;
+    if (financialWriteFields.some(([field, allowed]) => body[field] !== undefined && !allowed)) {
       throw new ForbiddenException('Moliyaviy ma\'lumotlarni o\'zgartirishga ruxsat yo\'q');
     }
     const current: any = await this.get(id, actor);
@@ -186,7 +192,9 @@ export class CustomersService {
       service: body.service,
       amount: body.amount == null || !this.canViewField(actor, 'amount') ? undefined : this.optionalNumber(body.amount) ?? 0,
       depositAmount: body.depositAmount === undefined || !this.canViewField(actor, 'deposit') ? undefined : body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount),
-      currencyId: body.currencyId !== undefined || body.currencyCode !== undefined ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : undefined,
+      currencyId: (body.currencyId !== undefined || body.currencyCode !== undefined) && canViewCustomerAmount(actor)
+        ? await this.resolveCurrencyId(body.currencyId, body.currencyCode)
+        : undefined,
       businessTypeId: body.businessTypeId === undefined ? undefined : body.businessTypeId === null || body.businessTypeId === '' ? null : await this.resolveBusinessTypeId(body.businessTypeId),
       notes: body.notes ?? body.note,
       note: body.note ?? body.notes,
@@ -369,7 +377,6 @@ export class CustomersService {
         phone: this.canViewField(actor, 'phone'),
         amount: this.canViewField(actor, 'amount'),
         deposit: this.canViewField(actor, 'deposit'),
-        financial: canViewFinancials(actor),
       },
       hideCreator: !this.canViewCreator(customer, actor),
     });
@@ -428,8 +435,8 @@ export class CustomersService {
   private canViewField(actor: any, field: 'phone' | 'amount' | 'deposit') {
     if (!actor || isAdmin(actor)) return true;
     if (isPartner(actor)) return field === 'phone';
-    if ((field === 'amount' || field === 'deposit') && !canViewFinancials(actor)) return false;
-    if ((field === 'amount' || field === 'deposit') && actor.permissions?.includes('customers.viewFinancials')) return true;
+    if (field === 'amount') return canViewCustomerAmount(actor);
+    if (field === 'deposit') return canViewCustomerDeposit(actor);
     const permission = field === 'phone' ? 'customers.viewPhone' : field === 'amount' ? 'customers.viewAmount' : 'customers.viewDeposit';
     return actor.permissions?.includes(permission) || actor.permissions?.includes(`${field}.view`);
   }

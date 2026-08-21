@@ -66,6 +66,12 @@ export class SupportController {
     return this.support.createBusinessType(body, req.user);
   }
 
+  @RequirePermissions('settings.edit')
+  @Delete('business-types/:id')
+  deleteBusinessType(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.deleteBusinessType(id, req.user);
+  }
+
   @RequirePermissions('settings.view')
   @Get('customer-field-defs')
   fieldDefs(@Query() query: any) {

@@ -143,7 +143,7 @@ export class AuthService {
     }
 
     // Expire legacy cookies only. Current auth is carried by the requesting
-    // tab in sessionStorage and is cleared by that tab's frontend.
+    // context in its Authorization header and is cleared by the frontend.
     this.clearCookies(res);
     return { ok: true };
   }

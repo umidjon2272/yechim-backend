@@ -20,6 +20,10 @@ export function canViewAll(user: any, permission = 'customers.viewAll') {
   return isAdmin(user) || ['MANAGER'].includes(roleOf(user)) || user?.permissions?.includes(permission);
 }
 
+export function canEditCustomerCore(user?: any) {
+  return isAdmin(user) || Boolean(user?.permissions?.includes('customers.editCore'));
+}
+
 export function canViewFinancials(user?: any) {
   if (isAdmin(user)) return true;
   if (!user || roleOf(user) === 'PARTNER') return false;

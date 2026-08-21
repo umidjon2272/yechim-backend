@@ -59,6 +59,7 @@ model User {
   allowedGroups    UserAllowedGroup[]
 
   assignedCustomers  Customer[]     @relation("AssignedCustomers")
+  createdCustomers   Customer[]     @relation("CreatedCustomers")
   installerCustomers Customer[]     @relation("CustomerInstallers")
   createdTasks       Task[]         @relation("CreatedTasks")
   assignedTasks      Task[]         @relation("AssignedTasks")
@@ -146,6 +147,18 @@ model Currency {
   @@index([isDefault])
 }
 
+model BusinessType {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  isActive  Boolean    @default(true)
+  sortOrder Int        @default(0)
+  customers Customer[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
 model Customer {
   id                  String          @id @default(cuid())
   name                String
@@ -160,6 +173,10 @@ model Customer {
   depositAmount       Decimal?
   currencyId          String?
   currency            Currency?       @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+  businessTypeId      String?
+  businessType        BusinessType?   @relation(fields: [businessTypeId], references: [id], onDelete: SetNull)
+  createdById          String?
+  createdBy            User?           @relation("CreatedCustomers", fields: [createdById], references: [id], onDelete: SetNull)
   notes               String?
   note                String?
   address             Json?
@@ -207,6 +224,8 @@ model Customer {
   @@index([status])
   @@index([deletedAt])
   @@index([currencyId])
+  @@index([businessTypeId])
+  @@index([createdById])
 }
 
 model CustomerGroup {

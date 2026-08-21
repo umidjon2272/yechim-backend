@@ -44,7 +44,7 @@ export function publicUser(user: any, options: { exposePermissions?: boolean } =
   };
 }
 
-export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean; financial?: boolean } } = {}): any {
+export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; hideFollowUps?: boolean; hideActivitySummary?: boolean; hideCreator?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean; financial?: boolean } } = {}): any {
   if (!customer) return null;
   const now = Date.now();
   const stageEnteredAt = customer.stageEnteredAt || customer.updatedAt || customer.createdAt;
@@ -54,7 +54,7 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
   const tomorrowStart = todayStart + 86400000;
-  const latestNote = customer.activities?.[0] || null;
+  const latestNote = customer.activities?.[0] || (customer.note || customer.notes ? { id: null, message: customer.note || customer.notes, createdAt: customer.updatedAt || customer.createdAt, createdBy: null } : null);
   const groups = customer.groups || [];
   if (options.partner) {
     return {
@@ -85,6 +85,8 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     ...(options.fieldVisibility?.financial === false || options.fieldVisibility?.deposit === false ? {} : { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) }),
     ...(options.fieldVisibility?.financial === false ? {} : { currencyId: customer.currencyId || customer.currency?.id || null }),
     ...(options.fieldVisibility?.financial === false ? {} : { currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null }),
+    businessTypeId: customer.businessTypeId || customer.businessType?.id || null,
+    businessType: customer.businessType ? { id: customer.businessType.id, name: customer.businessType.name, isActive: customer.businessType.isActive } : null,
     notes: options.hideInternalNotes ? null : customer.notes,
     note: options.hideInternalNotes ? null : customer.note,
     address: customer.address ?? null,
@@ -104,6 +106,14 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     pipelineId: customer.pipelineId,
     assignedEmployeeId: customer.assignedEmployeeId,
     assignedEmployee: publicUser(customer.assignedEmployee),
+    ...(options.hideCreator ? {} : {
+      createdById: customer.createdById || null,
+      createdBy: customer.createdBy ? {
+        id: customer.createdBy.id,
+        name: customer.createdBy.name,
+        avatarUrl: customer.createdBy.avatarUrl || null,
+      } : null,
+    }),
     nextContactAt,
     lastContactAt: customer.lastContactAt || null,
     isFollowUpToday: nextContactTime != null && nextContactTime >= todayStart && nextContactTime < tomorrowStart,
@@ -115,6 +125,26 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     installerEmployeeId: customer.installerEmployeeId || null,
     installerEmployee: publicUser(customer.installerEmployee),
     latestNote: options.hideInternalNotes ? null : latestNote ? { id: latestNote.id, message: latestNote.message, createdAt: latestNote.createdAt, createdBy: publicUser(latestNote.createdBy) } : null,
+    latestActivity: options.hideActivitySummary || (options.hideInternalNotes && customer.latestActivity?.type === 'NOTE')
+      ? null
+      : customer.latestActivity
+        ? { id: customer.latestActivity.id, type: customer.latestActivity.type, message: customer.latestActivity.message, createdAt: customer.latestActivity.createdAt }
+        : null,
+    nextReminder: !options.hideFollowUps && customer.reminders?.[0]
+      ? {
+          id: customer.reminders[0].id,
+          type: customer.reminders[0].type,
+          title: customer.reminders[0].title,
+          note: customer.reminders[0].note || null,
+          remindAt: customer.reminders[0].remindAt,
+          status: customer.reminders[0].status,
+        }
+      : null,
+    nextAction: !options.hideFollowUps && customer.reminders?.[0]
+      ? { type: 'REMINDER', at: customer.reminders[0].remindAt, title: customer.reminders[0].title, note: customer.reminders[0].note || null }
+      : nextContactAt
+        ? { type: 'FOLLOW_UP', at: nextContactAt }
+        : null,
     groupIds: groups.map((g: any) => g.id),
     groups,
     business: customer.businesses?.[0] ? businessDto(customer.businesses[0]) : null,

@@ -17,6 +17,8 @@ export const ALL_PERMISSIONS = [
   'customers.viewAll',
   'customers.create',
   'customers.edit',
+  'customers.editCore',
+  'customers.viewCreatedBy',
   'customers.delete',
   'customers.viewPhone',
   'customers.viewAmount',

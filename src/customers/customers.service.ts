@@ -2,17 +2,19 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { DEFAULT_PIPELINE_NAME } from '../common/defaults';
-import { canViewAll, canViewFinancials, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
+import { canEditCustomerCore, canViewAll, canViewFinancials, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
 import { customerDto, uniqueConflict } from '../common/mappers';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 
 const includeCustomer = {
   assignedEmployee: { include: { team: true } },
+  createdBy: { include: { team: true } },
   installerEmployee: { include: { team: true } },
   groups: true,
   partnerRewards: true,
   currency: true,
+  businessType: true,
   businesses: true,
   stage: true,
   activities: {
@@ -20,6 +22,12 @@ const includeCustomer = {
     orderBy: { createdAt: 'desc' },
     take: 1,
     include: { createdBy: { include: { team: true } } },
+  },
+  reminders: {
+    where: { status: 'PENDING' },
+    orderBy: { remindAt: 'asc' },
+    take: 1,
+    select: { id: true, type: true, title: true, note: true, remindAt: true, status: true },
   },
 } as const;
 
@@ -69,7 +77,8 @@ export class CustomersService {
       return sort.startsWith('-') ? (av < bv ? 1 : -1) : av > bv ? 1 : -1;
     });
     const start = (page - 1) * pageSize;
-    return paged(customers.slice(start, start + pageSize).map((customer) => this.dto(customer, actor)), customers.length, page, pageSize);
+    const customersWithSummaries = await this.attachActivitySummaries(customers);
+    return paged(customersWithSummaries.slice(start, start + pageSize).map((customer) => this.dto(customer, actor)), customers.length, page, pageSize);
   }
 
   async get(id: string, actor?: any) {
@@ -79,7 +88,8 @@ export class CustomersService {
       include: includeCustomer,
     });
     if (!customer) throw new NotFoundException('Mijoz topilmadi');
-    return this.dto(customer, actor);
+    const [customerWithSummary] = await this.attachActivitySummaries([customer]);
+    return this.dto(customerWithSummary, actor);
   }
 
   async create(body: any, actor?: any) {
@@ -103,6 +113,7 @@ export class CustomersService {
           amount: this.canViewField(actor, 'amount') ? this.optionalNumber(body.amount) ?? 0 : 0,
           depositAmount: this.canViewField(actor, 'deposit') ? this.optionalNumber(body.depositAmount) : null,
           currencyId,
+          businessTypeId: body.businessTypeId ? await this.resolveBusinessTypeId(body.businessTypeId) : null,
           notes: body.notes || body.note || null,
           note: body.note || body.notes || null,
           address: body.address === undefined || body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -118,6 +129,9 @@ export class CustomersService {
           pipelineId: body.pipelineId || pipeline.id,
           stageId,
           assignedEmployeeId: this.canViewAll(actor) ? body.assignedEmployeeId || null : actor?.id || null,
+          // The creator is always taken from the authenticated request actor;
+          // a client-supplied body.createdById is deliberately ignored.
+          createdById: actor?.id || null,
           nextContactAt: body.nextContactAt ? this.toDate(body.nextContactAt) : null,
           stageEnteredAt: new Date(),
           installationAt: body.installationAt ? this.toDate(body.installationAt) : null,
@@ -126,7 +140,13 @@ export class CustomersService {
         },
         include: includeCustomer,
       });
-      await this.createActivity(customer.id, 'CUSTOMER_CREATED', 'Mijoz yaratildi', actor?.id);
+      await this.createActivity(
+        customer.id,
+        'CUSTOMER_CREATED',
+        'Mijoz yaratildi',
+        actor?.id,
+        { createdById: actor?.id || null, createdByName: actor?.name || null },
+      );
       await this.recordStageHistory(customer.id, null, customer.stage, customer.createdAt || new Date());
       await this.createStageAutomation(customer, stageId, actor);
       if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL', body.reminderNote ?? body.note ?? body.comment);
@@ -141,6 +161,7 @@ export class CustomersService {
 
   async update(id: string, body: any, actor?: any) {
     this.ensurePartnerCannotWrite(actor);
+    this.ensureCoreEdit(body, actor);
     if (!canViewFinancials(actor) && ['amount', 'depositAmount', 'currencyId', 'currencyCode'].some((field) => body[field] !== undefined)) {
       throw new ForbiddenException('Moliyaviy ma\'lumotlarni o\'zgartirishga ruxsat yo\'q');
     }
@@ -166,6 +187,7 @@ export class CustomersService {
       amount: body.amount == null || !this.canViewField(actor, 'amount') ? undefined : this.optionalNumber(body.amount) ?? 0,
       depositAmount: body.depositAmount === undefined || !this.canViewField(actor, 'deposit') ? undefined : body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount),
       currencyId: body.currencyId !== undefined || body.currencyCode !== undefined ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : undefined,
+      businessTypeId: body.businessTypeId === undefined ? undefined : body.businessTypeId === null || body.businessTypeId === '' ? null : await this.resolveBusinessTypeId(body.businessTypeId),
       notes: body.notes ?? body.note,
       note: body.note ?? body.notes,
       address: body.address === undefined ? undefined : body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -341,17 +363,66 @@ export class CustomersService {
       partner: Boolean(partnerGroupId),
       partnerGroupId: partnerGroupId || undefined,
       hideInternalNotes: !this.canViewComments(actor),
+      hideFollowUps: !this.canViewFollowUps(actor),
+      hideActivitySummary: !this.canViewActivities(actor),
       fieldVisibility: {
         phone: this.canViewField(actor, 'phone'),
         amount: this.canViewField(actor, 'amount'),
         deposit: this.canViewField(actor, 'deposit'),
         financial: canViewFinancials(actor),
       },
+      hideCreator: !this.canViewCreator(customer, actor),
     });
+  }
+
+  private canViewCreator(customer: any, actor?: any) {
+    if (!actor || isPartner(actor)) return false;
+    if (isAdmin(actor)) return true;
+    if (customer.createdById && customer.createdById === actor.id) return true;
+    return Boolean(actor.permissions?.includes('customers.viewCreatedBy') || actor.permissions?.includes('customers.viewAll'));
+  }
+
+  private async attachActivitySummaries(customers: any[]) {
+    const ids = customers.map((customer) => customer.id).filter(Boolean);
+    if (!ids.length || !this.prisma.activity?.findMany) return customers;
+    const activities = await this.prisma.activity.findMany({
+      where: { customerId: { in: ids } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, customerId: true, type: true, message: true, createdAt: true },
+    });
+    const latestByCustomer = new Map<string, any>();
+    for (const activity of activities) {
+      if (!latestByCustomer.has(activity.customerId)) latestByCustomer.set(activity.customerId, activity);
+    }
+    return customers.map((customer) => ({
+      ...customer,
+      latestActivity: latestByCustomer.get(customer.id) || null,
+    }));
+  }
+
+  private ensureCoreEdit(body: any, actor?: any) {
+    if (canEditCustomerCore(actor)) return;
+    const coreFields = [
+      'name', 'firstName', 'lastName', 'phone', 'phone2', 'telegram', 'email',
+      'service', 'programs', 'businessTypeId', 'amount', 'depositAmount', 'notes', 'note', 'status',
+      'currencyId', 'currencyCode', 'address', 'latitude', 'longitude',
+      'birthDate', 'telegramUsername', 'instagram', 'source', 'customFields',
+    ];
+    if (coreFields.some((field) => body[field] !== undefined)) {
+      throw new ForbiddenException('Customer asosiy ma\'lumotlarini o\'zgartirishga ruxsat yo\'q');
+    }
   }
 
   private canViewComments(actor?: any) {
     return Boolean(actor && (['ADMIN', 'SUPER_ADMIN'].includes(String(actor.role || '').toUpperCase()) || actor.permissions?.includes('comments.view')));
+  }
+
+  private canViewFollowUps(actor?: any) {
+    return Boolean(actor && (isAdmin(actor) || actor.permissions?.includes('reminders.view') || actor.permissions?.includes('calls.view')));
+  }
+
+  private canViewActivities(actor?: any) {
+    return Boolean(actor && (isAdmin(actor) || actor.permissions?.includes('activities.view')));
   }
 
   private canViewField(actor: any, field: 'phone' | 'amount' | 'deposit') {
@@ -495,6 +566,14 @@ export class CustomersService {
         ? await this.prisma.currency.findFirst({ where: { code, isActive: true }, select: { id: true } })
         : await this.prisma.currency.findFirst({ where: { isDefault: true, isActive: true }, select: { id: true } });
     if (!item) throw new ConflictException('Faol valyuta topilmadi');
+    return item.id;
+  }
+
+  private async resolveBusinessTypeId(value: any) {
+    const id = String(value || '').trim();
+    if (!id) return null;
+    const item = await this.prisma.businessType.findFirst({ where: { id, isActive: true }, select: { id: true } });
+    if (!item) throw new ConflictException('Faol biznes turi topilmadi');
     return item.id;
   }
 

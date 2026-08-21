@@ -1,6 +1,6 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ALL_PERMISSIONS, DEFAULT_STAGES } from './defaults';
-import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber } from './mappers';
+import { businessDto, customerDto, dealDto, dealItemDto, installationDto, leadDto, paymentDto, toNumber, uniqueConflict } from './mappers';
 import { paged, pagination } from './pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import { canViewFinancials, customerScopeWhere, isAdmin, isPartner } from './access';
@@ -79,6 +79,30 @@ export class SupportService {
       );
     }
     return response;
+  }
+
+  async businessTypes(actor?: any) {
+    const isAdminUser = isAdmin(actor);
+    const items = await this.prisma.businessType.findMany({
+      where: isAdminUser ? {} : { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+    return { items, total: items.length };
+  }
+
+  async createBusinessType(body: any, actor?: any) {
+    if (!isAdmin(actor)) throw new ForbiddenException('Biznes turini faqat admin qo\'sha oladi');
+    const name = String(body.name || '').trim();
+    if (!name) throw new ConflictException('Biznes turi nomi kiritilishi shart');
+    const existing = await this.prisma.businessType.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
+    if (existing) throw new ConflictException('Bu biznes turi allaqachon mavjud');
+    const last = await this.prisma.businessType.findFirst({ orderBy: { sortOrder: 'desc' }, select: { sortOrder: true } });
+    try {
+      return await this.prisma.businessType.create({ data: { name, sortOrder: (last?.sortOrder || 0) + 10 } });
+    } catch (error) {
+      if (uniqueConflict(error)) throw new ConflictException('Bu biznes turi allaqachon mavjud');
+      throw error;
+    }
   }
 
   async fieldDefs(query: any) {

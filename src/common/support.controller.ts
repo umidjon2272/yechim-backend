@@ -54,6 +54,18 @@ export class SupportController {
     return this.support.customerOptions(req.user);
   }
 
+  @RequirePermissions('customers.view')
+  @Get('business-types')
+  businessTypes(@Req() req: Request & { user?: any }) {
+    return this.support.businessTypes(req.user);
+  }
+
+  @RequirePermissions('settings.edit')
+  @Post('business-types')
+  createBusinessType(@Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.support.createBusinessType(body, req.user);
+  }
+
   @RequirePermissions('settings.view')
   @Get('customer-field-defs')
   fieldDefs(@Query() query: any) {

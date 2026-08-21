@@ -93,6 +93,26 @@ async function main() {
     create: { id: "currency-uzs", code: "UZS", name: "O‘zbekiston so‘mi", symbol: "so‘m", isDefault: true },
   });
 
+  const businessTypes = [
+    ['business-type-retail', 'Do‘kon / Chakana savdo', 10],
+    ['business-type-restaurant', 'Restoran / Kafe', 20],
+    ['business-type-pharmacy', 'Dorixona', 30],
+    ['business-type-beauty', 'Go‘zallik saloni', 40],
+    ['business-type-services', 'Xizmat ko‘rsatish', 50],
+    ['business-type-manufacturing', 'Ishlab chiqarish', 60],
+    ['business-type-distribution', 'Distribyutsiya', 70],
+    ['business-type-wholesale', 'Ombor / Ulgurji savdo', 80],
+    ['business-type-education', 'O‘quv markazi', 90],
+    ['business-type-other', 'Boshqa', 100],
+  ] as const;
+  for (const [id, name, sortOrder] of businessTypes) {
+    await prisma.businessType.upsert({
+      where: { id },
+      update: { name, isActive: true, sortOrder },
+      create: { id, name, isActive: true, sortOrder },
+    });
+  }
+
   for (const name of ["VIP", "Bito", "Ilxom aka mijozlari"]) {
     await prisma.customerGroup.upsert({
       where: { name },

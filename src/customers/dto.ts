@@ -23,4 +23,8 @@ export class CreateCustomerDto {
   @IsOptional()
   @IsString()
   stage?: string;
+
+  @IsOptional()
+  @IsString()
+  businessTypeId?: string;
 }

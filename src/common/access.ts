@@ -24,6 +24,10 @@ export function canEditCustomerCore(user?: any) {
   return isAdmin(user) || Boolean(user?.permissions?.includes('customers.editCore'));
 }
 
+export function canEditCustomerBusinessType(user?: any) {
+  return isAdmin(user) || Boolean(user?.permissions?.includes('customers.edit') || user?.permissions?.includes('customers.editCore'));
+}
+
 function permissionsOf(user?: any) {
   return Array.isArray(user?.permissions) ? user.permissions : [];
 }

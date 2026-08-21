@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsNumber, IsOptional, IsString } from 'class-validator';
 
 export class CreateCustomerDto {
   @IsString()
@@ -27,4 +27,9 @@ export class CreateCustomerDto {
   @IsOptional()
   @IsString()
   businessTypeId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  businessTypeIds?: string[];
 }

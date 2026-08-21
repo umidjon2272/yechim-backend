@@ -82,9 +82,11 @@ export class SupportService {
   }
 
   async businessTypes(actor?: any) {
-    const isAdminUser = isAdmin(actor);
     const items = await this.prisma.businessType.findMany({
-      where: isAdminUser ? {} : { isActive: true },
+      // Inactive types remain visible as disabled options so an existing
+      // customer's legacy selection is not hidden during edit. The backend
+      // still validates that every submitted id exists.
+      where: {},
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
     return { items, total: items.length };
@@ -111,11 +113,12 @@ export class SupportService {
     return this.prisma.$transaction(async (tx) => {
       const item = await tx.businessType.findUnique({
         where: { id },
-        include: { _count: { select: { customers: true } } },
+        include: { _count: { select: { customers: true, customerLinks: true } } },
       });
       if (!item) throw new NotFoundException('Biznes turi topilmadi');
 
-      if (item._count.customers > 0) {
+      const customerCount = Math.max(item._count.customers, item._count.customerLinks);
+      if (customerCount > 0) {
         const deactivated = await tx.businessType.update({
           where: { id },
           data: { isActive: false },
@@ -124,7 +127,7 @@ export class SupportService {
           ok: true,
           action: 'deactivated',
           item: deactivated,
-          customerCount: item._count.customers,
+          customerCount,
         };
       }
 

@@ -53,6 +53,22 @@ const creatorRecord = customerDto({
 assert.equal(creatorRecord.createdBy.name, 'Abdulaziz', 'creator relation is exposed to an allowed viewer');
 assert.equal('createdBy' in customerDto({ ...customer, createdById: 'employee-1', createdBy: { id: 'employee-1', name: 'Abdulaziz' } }, { hideCreator: true }), false, 'creator is hidden when the viewer lacks permission');
 
+let summaryQuery: any;
+const summaryService = new CustomersService({
+  activity: {
+    findMany: async (args: any) => {
+      summaryQuery = args;
+      return [{ id: 'call-1', customerId: 'customer-1', type: 'CALL', message: 'Qo\'ng\'iroq', createdAt: now, createdBy: { id: 'employee-2', name: 'Shuxrat', avatarUrl: null } }];
+    },
+  },
+} as any);
+const summarized = await (summaryService as any).attachActivitySummaries([{ id: 'customer-1' }]);
+assert.ok(summaryQuery.where.type.in.includes('REMINDER_COMPLETED'), 'last-contact query includes completed reminders');
+assert.equal(summarized[0].lastContact.createdBy.name, 'Shuxrat', 'last-contact summary includes the acting employee');
+const mappedLastContact = customerDto(summarized[0], { hideActivitySummary: false });
+assert.equal(mappedLastContact.lastContact.user.name, 'Shuxrat', 'last-contact mapper exposes the acting employee');
+assert.equal(customerDto(summarized[0], { hideLastContact: true }).lastContact, null, 'last-contact summary respects activity visibility');
+
 const partnerCustomer: any = customerDto(
   {
     id: 'partner-customer-1',

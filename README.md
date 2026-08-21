@@ -32,6 +32,11 @@ Root Directory: backend
 Build Command: npm install && npx prisma generate && npm run build
 Pre-deploy/Migration Command: npx prisma migrate deploy
 Start Command: npm run start:prod
+
+`npm run build` emits the canonical `dist/main.js` entrypoint and also keeps a
+temporary compatibility entrypoint at `dist/src/main.js` for older Render
+service settings. Update Render Start Command to `npm run start:prod` when
+possible.
 ```
 
 Required environment variables:

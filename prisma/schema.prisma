@@ -153,6 +153,7 @@ model BusinessType {
   isActive  Boolean    @default(true)
   sortOrder Int        @default(0)
   customers Customer[]
+  customerLinks CustomerBusinessType[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
 
@@ -175,6 +176,7 @@ model Customer {
   currency            Currency?       @relation(fields: [currencyId], references: [id], onDelete: Restrict)
   businessTypeId      String?
   businessType        BusinessType?   @relation(fields: [businessTypeId], references: [id], onDelete: SetNull)
+  businessTypeLinks   CustomerBusinessType[]
   createdById          String?
   createdBy            User?           @relation("CreatedCustomers", fields: [createdById], references: [id], onDelete: SetNull)
   notes               String?
@@ -226,6 +228,17 @@ model Customer {
   @@index([currencyId])
   @@index([businessTypeId])
   @@index([createdById])
+}
+
+model CustomerBusinessType {
+  customerId     String
+  businessTypeId String
+  createdAt      DateTime     @default(now())
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  businessType   BusinessType @relation(fields: [businessTypeId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, businessTypeId])
+  @@index([businessTypeId])
 }
 
 model CustomerGroup {

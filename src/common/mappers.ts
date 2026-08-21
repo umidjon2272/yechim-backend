@@ -44,7 +44,7 @@ export function publicUser(user: any, options: { exposePermissions?: boolean } =
   };
 }
 
-export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; hideFollowUps?: boolean; hideActivitySummary?: boolean; hideCreator?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean; financial?: boolean } } = {}): any {
+export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean; hideFollowUps?: boolean; hideActivitySummary?: boolean; hideLastContact?: boolean; hideCreator?: boolean; fieldVisibility?: { phone?: boolean; amount?: boolean; deposit?: boolean; financial?: boolean } } = {}): any {
   if (!customer) return null;
   const now = Date.now();
   const stageEnteredAt = customer.stageEnteredAt || customer.updatedAt || customer.createdAt;
@@ -56,6 +56,10 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
   const tomorrowStart = todayStart + 86400000;
   const latestNote = customer.activities?.[0] || (customer.note || customer.notes ? { id: null, message: customer.note || customer.notes, createdAt: customer.updatedAt || customer.createdAt, createdBy: null } : null);
   const groups = customer.groups || [];
+  const linkedBusinessTypes = Array.isArray(customer.businessTypeLinks) && customer.businessTypeLinks.length
+    ? customer.businessTypeLinks.map((link: any) => link.businessType).filter(Boolean)
+    : customer.businessType ? [customer.businessType] : [];
+  const primaryBusinessType = linkedBusinessTypes[0] || customer.businessType || null;
   const showAmount = options.fieldVisibility?.financial !== false && options.fieldVisibility?.amount !== false;
   const showDeposit = options.fieldVisibility?.financial !== false && options.fieldVisibility?.deposit !== false;
   if (options.partner) {
@@ -87,8 +91,11 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     ...(showDeposit ? { depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount) } : {}),
     ...(showAmount ? { currencyId: customer.currencyId || customer.currency?.id || null } : {}),
     ...(showAmount ? { currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null } : {}),
-    businessTypeId: customer.businessTypeId || customer.businessType?.id || null,
-    businessType: customer.businessType ? { id: customer.businessType.id, name: customer.businessType.name, isActive: customer.businessType.isActive } : null,
+    businessTypeIds: linkedBusinessTypes.map((item: any) => item.id),
+    businessTypes: linkedBusinessTypes.map((item: any) => ({ id: item.id, name: item.name, isActive: item.isActive })),
+    // Keep the old scalar fields in the response for existing clients.
+    businessTypeId: customer.businessTypeId || primaryBusinessType?.id || null,
+    businessType: primaryBusinessType ? { id: primaryBusinessType.id, name: primaryBusinessType.name, isActive: primaryBusinessType.isActive } : null,
     notes: options.hideInternalNotes ? null : customer.notes,
     note: options.hideInternalNotes ? null : customer.note,
     address: customer.address ?? null,
@@ -118,6 +125,20 @@ export function customerDto(customer: any, options: { partner?: boolean; partner
     }),
     nextContactAt,
     lastContactAt: customer.lastContactAt || null,
+    lastContactVisible: !options.hideLastContact,
+    lastContact: !options.hideLastContact && customer.lastContact
+      ? {
+          at: customer.lastContact.createdAt,
+          type: customer.lastContact.type,
+          user: customer.lastContact.createdBy
+            ? {
+                id: customer.lastContact.createdBy.id,
+                name: customer.lastContact.createdBy.name,
+                avatarUrl: customer.lastContact.createdBy.avatarUrl || null,
+              }
+            : null,
+        }
+      : null,
     isFollowUpToday: nextContactTime != null && nextContactTime >= todayStart && nextContactTime < tomorrowStart,
     isFollowUpOverdue: nextContactTime != null && nextContactTime < now,
     stageEnteredAt,

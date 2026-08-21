@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { DEFAULT_PIPELINE_NAME } from '../common/defaults';
-import { canEditCustomerCore, canViewAll, canViewCustomerAmount, canViewCustomerDeposit, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
+import { canEditCustomerBusinessType, canEditCustomerCore, canViewAll, canViewCustomerAmount, canViewCustomerDeposit, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
 import { customerDto, uniqueConflict } from '../common/mappers';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,6 +15,7 @@ const includeCustomer = {
   partnerRewards: true,
   currency: true,
   businessType: true,
+  businessTypeLinks: { include: { businessType: true } },
   businesses: true,
   stage: true,
   activities: {
@@ -30,6 +31,9 @@ const includeCustomer = {
     select: { id: true, type: true, title: true, note: true, remindAt: true, status: true },
   },
 } as const;
+
+// A real customer touchpoint, not an internal state change or a reminder plan.
+const LAST_CONTACT_ACTIVITY_TYPES = ['CALL', 'FOLLOW_UP', 'MEETING', 'DEMO', 'NOTE', 'REMINDER_COMPLETED'];
 
 @Injectable()
 export class CustomersService {
@@ -98,6 +102,7 @@ export class CustomersService {
     const stageId = await this.resolveStageId(body.stageId ?? body.stage ?? 'NEW');
     const programs = this.normalizePrograms(body.programs);
     const requestedGroupIds = await this.resolveCreateGroupIds(body, actor);
+    const businessTypeIds = await this.resolveBusinessTypeIds(body.businessTypeIds, body.businessTypeId);
     const currencyId = canViewCustomerAmount(actor) ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : null;
     try {
       const customer = await this.prisma.customer.create({
@@ -113,7 +118,12 @@ export class CustomersService {
           amount: this.canViewField(actor, 'amount') ? this.optionalNumber(body.amount) ?? 0 : 0,
           depositAmount: this.canViewField(actor, 'deposit') ? this.optionalNumber(body.depositAmount) : null,
           currencyId,
-          businessTypeId: body.businessTypeId ? await this.resolveBusinessTypeId(body.businessTypeId) : null,
+          // Keep the legacy scalar synchronized with the first selected type
+          // while the join table stores the complete multi-select.
+          businessTypeId: businessTypeIds[0] || null,
+          businessTypeLinks: businessTypeIds.length
+            ? { create: businessTypeIds.map((businessTypeId) => ({ businessType: { connect: { id: businessTypeId } } })) }
+            : undefined,
           notes: body.notes || body.note || null,
           note: body.note || body.notes || null,
           address: body.address === undefined || body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -161,6 +171,10 @@ export class CustomersService {
 
   async update(id: string, body: any, actor?: any) {
     this.ensurePartnerCannotWrite(actor);
+    const hasBusinessTypeSelection = body.businessTypeIds !== undefined || body.businessTypeId !== undefined;
+    if (hasBusinessTypeSelection && !canEditCustomerBusinessType(actor)) {
+      throw new ForbiddenException('Biznes turini o\'zgartirishga ruxsat yo\'q');
+    }
     this.ensureCoreEdit(body, actor);
     const financialWriteFields = [
       ['amount', canViewCustomerAmount(actor)],
@@ -172,6 +186,9 @@ export class CustomersService {
       throw new ForbiddenException('Moliyaviy ma\'lumotlarni o\'zgartirishga ruxsat yo\'q');
     }
     const current: any = await this.get(id, actor);
+    const businessTypeIds = hasBusinessTypeSelection
+      ? await this.resolveBusinessTypeIds(body.businessTypeIds, body.businessTypeId)
+      : undefined;
     const requestedStage = body.stageId ?? body.stage;
     const nextStageId = requestedStage ? await this.resolveStageId(requestedStage) : undefined;
     const stageChanged = nextStageId && nextStageId !== current.stageId;
@@ -195,7 +212,15 @@ export class CustomersService {
       currencyId: (body.currencyId !== undefined || body.currencyCode !== undefined) && canViewCustomerAmount(actor)
         ? await this.resolveCurrencyId(body.currencyId, body.currencyCode)
         : undefined,
-      businessTypeId: body.businessTypeId === undefined ? undefined : body.businessTypeId === null || body.businessTypeId === '' ? null : await this.resolveBusinessTypeId(body.businessTypeId),
+      businessTypeId: businessTypeIds === undefined ? undefined : businessTypeIds[0] || null,
+      businessTypeLinks: businessTypeIds === undefined
+        ? undefined
+        : {
+            deleteMany: {},
+            ...(businessTypeIds.length
+              ? { create: businessTypeIds.map((businessTypeId) => ({ businessType: { connect: { id: businessTypeId } } })) }
+              : {}),
+          },
       notes: body.notes ?? body.note,
       note: body.note ?? body.notes,
       address: body.address === undefined ? undefined : body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -373,6 +398,7 @@ export class CustomersService {
       hideInternalNotes: !this.canViewComments(actor),
       hideFollowUps: !this.canViewFollowUps(actor),
       hideActivitySummary: !this.canViewActivities(actor),
+      hideLastContact: !this.canViewLastContact(actor),
       fieldVisibility: {
         phone: this.canViewField(actor, 'phone'),
         amount: this.canViewField(actor, 'amount'),
@@ -393,9 +419,16 @@ export class CustomersService {
     const ids = customers.map((customer) => customer.id).filter(Boolean);
     if (!ids.length || !this.prisma.activity?.findMany) return customers;
     const activities = await this.prisma.activity.findMany({
-      where: { customerId: { in: ids } },
+      where: { customerId: { in: ids }, type: { in: LAST_CONTACT_ACTIVITY_TYPES } },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, customerId: true, type: true, message: true, createdAt: true },
+      select: {
+        id: true,
+        customerId: true,
+        type: true,
+        message: true,
+        createdAt: true,
+        createdBy: { select: { id: true, name: true, avatarUrl: true } },
+      },
     });
     const latestByCustomer = new Map<string, any>();
     for (const activity of activities) {
@@ -404,6 +437,7 @@ export class CustomersService {
     return customers.map((customer) => ({
       ...customer,
       latestActivity: latestByCustomer.get(customer.id) || null,
+      lastContact: latestByCustomer.get(customer.id) || null,
     }));
   }
 
@@ -411,7 +445,7 @@ export class CustomersService {
     if (canEditCustomerCore(actor)) return;
     const coreFields = [
       'name', 'firstName', 'lastName', 'phone', 'phone2', 'telegram', 'email',
-      'service', 'programs', 'businessTypeId', 'amount', 'depositAmount', 'notes', 'note', 'status',
+      'service', 'programs', 'amount', 'depositAmount', 'notes', 'note', 'status',
       'currencyId', 'currencyCode', 'address', 'latitude', 'longitude',
       'birthDate', 'telegramUsername', 'instagram', 'source', 'customFields',
     ];
@@ -430,6 +464,17 @@ export class CustomersService {
 
   private canViewActivities(actor?: any) {
     return Boolean(actor && (isAdmin(actor) || actor.permissions?.includes('activities.view')));
+  }
+
+  private canViewLastContact(actor?: any) {
+    if (!actor || isPartner(actor)) return false;
+    return Boolean(
+      isAdmin(actor)
+      || actor.permissions?.includes('activities.view')
+      || actor.permissions?.includes('history.view')
+      || actor.permissions?.includes('calls.view')
+      || actor.permissions?.includes('comments.view'),
+    );
   }
 
   private canViewField(actor: any, field: 'phone' | 'amount' | 'deposit') {
@@ -576,12 +621,18 @@ export class CustomersService {
     return item.id;
   }
 
-  private async resolveBusinessTypeId(value: any) {
-    const id = String(value || '').trim();
-    if (!id) return null;
-    const item = await this.prisma.businessType.findFirst({ where: { id, isActive: true }, select: { id: true } });
-    if (!item) throw new ConflictException('Faol biznes turi topilmadi');
-    return item.id;
+  private async resolveBusinessTypeIds(values: any, legacyValue?: any) {
+    const rawValues = Array.isArray(values)
+      ? values
+      : values !== undefined
+        ? values === null || values === '' ? [] : [values]
+        : legacyValue === undefined || legacyValue === null || legacyValue === '' ? [] : [legacyValue];
+    const ids = [...new Set(rawValues.map((value) => String(value || '').trim()).filter(Boolean))];
+    if (!ids.length) return [];
+    const items = await this.prisma.businessType.findMany({ where: { id: { in: ids } }, select: { id: true } });
+    const found = new Set(items.map((item) => item.id));
+    if (ids.some((id) => !found.has(id))) throw new ConflictException('Biznes turi topilmadi');
+    return ids;
   }
 
   private async createStageAutomation(customer: any, stageId: string, actor?: any) {

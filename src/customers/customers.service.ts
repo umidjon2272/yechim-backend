@@ -32,6 +32,15 @@ const includeCustomer = {
   },
 } as const;
 
+// List cards do not need the full customer relation graph. Keeping this
+// include separate prevents a paginated list from materialising every
+// business/activity/reminder relation for each row.
+const listIncludeCustomer = {
+  ...includeCustomer,
+  businesses: { take: 1, orderBy: { createdAt: 'asc' as const } },
+  partnerRewards: true,
+} as const;
+
 // A real customer touchpoint, not an internal state change or a reminder plan.
 const LAST_CONTACT_ACTIVITY_TYPES = ['CALL', 'FOLLOW_UP', 'MEETING', 'DEMO', 'NOTE', 'REMINDER_COMPLETED'];
 
@@ -46,6 +55,15 @@ export class CustomersService {
     const scopeWhere = customerScopeWhere(actor);
     const baseWhere: any = { deletedAt: null, ...scopeWhere };
     const andFilters: any[] = [];
+    if (search) {
+      andFilters.push({
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ],
+      });
+    }
     if (query.status) baseWhere.status = query.status;
     if (query.stage) baseWhere.stageId = query.stage;
     if (query.assignedEmployeeId && (this.canViewAll(actor) || query.assignedEmployeeId === actor?.id)) baseWhere.assignedEmployeeId = query.assignedEmployeeId;
@@ -62,27 +80,30 @@ export class CustomersService {
       if (query.createdTo) createdAt.lte = new Date(`${query.createdTo}T23:59:59.999Z`);
       baseWhere.createdAt = createdAt;
     }
-    if (andFilters.length) baseWhere.AND = andFilters;
-    let customers = await this.prisma.customer.findMany({ where: baseWhere, include: includeCustomer });
-    if (search) {
-      customers = customers.filter((c) => [c.name, c.phone, c.email].filter(Boolean).some((v) => String(v).toLowerCase().includes(search)));
+    if (query.city) {
+      andFilters.push({ address: { path: ['city'], equals: String(query.city) } });
     }
-    if (query.city) customers = customers.filter((c) => (c.address as any)?.city === query.city);
+    if (query.installationStatus) {
+      andFilters.push({ installations: { some: { status: String(query.installationStatus) } } });
+    }
+    if (andFilters.length) baseWhere.AND = andFilters;
     const sort = String(query.sort || '-createdAt');
-    customers.sort((a: any, b: any) => {
-      if (sort === 'nextContactAt') return this.contactOrder(a, b);
-      if (sort === '-createdAt') {
-        const contactOrder = this.contactOrder(a, b);
-        if (contactOrder !== 0) return contactOrder;
-      }
-      const key = sort.replace('-', '');
-      const av = key === 'name' ? a.name : new Date(a.createdAt).getTime();
-      const bv = key === 'name' ? b.name : new Date(b.createdAt).getTime();
-      return sort.startsWith('-') ? (av < bv ? 1 : -1) : av > bv ? 1 : -1;
-    });
-    const start = (page - 1) * pageSize;
+    const orderBy = sort === 'name'
+      ? { name: 'asc' as const }
+      : sort === '-name'
+        ? { name: 'desc' as const }
+        : sort === 'nextContactAt'
+          ? { nextContactAt: 'asc' as const }
+          : sort === 'createdAt'
+            ? { createdAt: 'asc' as const }
+            : { createdAt: 'desc' as const };
+    const customersPromise = this.prisma.customer.findMany({ where: baseWhere, include: listIncludeCustomer, orderBy, skip: (page - 1) * pageSize, take: pageSize });
+    const totalPromise = typeof this.prisma.customer.count === 'function'
+      ? this.prisma.customer.count({ where: baseWhere })
+      : customersPromise.then((items: any[]) => items.length);
+    const [customers, total] = await Promise.all([customersPromise, totalPromise]);
     const customersWithSummaries = await this.attachActivitySummaries(customers);
-    return paged(customersWithSummaries.slice(start, start + pageSize).map((customer) => this.dto(customer, actor)), customers.length, page, pageSize);
+    return paged(customersWithSummaries.map((customer) => this.dto(customer, actor)), total, page, pageSize);
   }
 
   async get(id: string, actor?: any) {
@@ -375,7 +396,10 @@ export class CustomersService {
   }
 
   async filterOptions(actor?: any) {
-    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null, ...customerScopeWhere(actor) } });
+    const customers = await this.prisma.customer.findMany({
+      where: { deletedAt: null, ...customerScopeWhere(actor) },
+      select: { address: true, stageId: true },
+    });
     const cities = new Set<string>();
     const stageCounts: Record<string, number> = {};
     customers.forEach((c) => {

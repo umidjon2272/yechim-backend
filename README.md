@@ -65,4 +65,7 @@ migration cleanup. Every app launch must still validate the token through
 
 Run `npm run seed` once after the first deploy to create the admin configured
 by `ADMIN_EMAIL`/`ADMIN_PASSWORD`, the `Asosiy savdo` pipeline, and the 9
-default customer stages. There is no built-in production admin password.
+default customer stages. On a new empty database it also creates the initial
+customer groups; those groups are marked as seeded and are never recreated by
+later seed/deploy runs after an admin deletes one. There is no built-in
+production admin password.

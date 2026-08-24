@@ -302,6 +302,21 @@ assert.ok(notificationReadData.readAt, 'notification read action stores readAt')
 await notificationsService.markAllRead({ id: 'employee-1' });
 assert.equal(notificationReadAllData.isRead, true, 'read-all action persists');
 
+let deletedGroupId: string | undefined;
+const deleteGroupsService = new GroupsService({
+  customerGroup: {
+    findUnique: async () => ({ id: 'delete-group-1', name: 'Test group' }),
+    delete: async ({ where }: any) => { deletedGroupId = where.id; return { id: where.id }; },
+  },
+} as any);
+assert.deepEqual(await deleteGroupsService.remove('delete-group-1', { role: 'ADMIN' }), { ok: true }, 'admin can delete a group');
+assert.equal(deletedGroupId, 'delete-group-1', 'group delete reaches Prisma');
+await assert.rejects(
+  () => deleteGroupsService.remove('delete-group-1', { role: 'EMPLOYEE', permissions: ['customers.delete'] }),
+  /Guruhni faqat admin/,
+  'employee cannot delete a group even with a forged permission',
+);
+
 const period = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 const rewardRows = Array.from({ length: 30 }, (_, index) => ({
   id: `reward-${index + 1}`, groupId: 'group-1', customerId: `customer-${index + 1}`, period, amount: 100,
@@ -380,6 +395,7 @@ assert.equal(activityCreatePayload.type, 'NOTE', 'note activity type');
 assert.equal(activityCreatePayload.message, 'Izoh: Narxni kelishadi', 'note timeline message');
 
 const schema = readFileSync('prisma/schema.prisma', 'utf8');
+const seed = readFileSync('prisma/seed.ts', 'utf8');
 const migration = readFileSync('prisma/migrations/20260818150000_reminders_timeline_automation/migration.sql', 'utf8');
 const rewardMigration = readFileSync('prisma/migrations/20260818190000_partner_reward_once_per_customer/migration.sql', 'utf8');
 const notificationMigration = readFileSync('prisma/migrations/20260818200000_notification_contract/migration.sql', 'utf8');
@@ -388,6 +404,8 @@ const scopeMigration = readFileSync('prisma/migrations/20260820150000_partner_em
 const historyMigration = readFileSync('prisma/migrations/20260820160000_customer_stage_history_and_pipeline_total_permission/migration.sql', 'utf8');
 const createdByMigration = readFileSync('prisma/migrations/20260821110000_customer_created_by/migration.sql', 'utf8');
 for (const marker of ['nextContactAt', 'stageEnteredAt', 'installationAt', 'installerEmployeeId', 'model Activity', 'model Reminder', 'model Currency', 'currencyId', 'note', 'model Notification', '@@unique([groupId, customerId])', 'isRead', 'readAt', 'PARTNER', 'EmployeeCustomerVisibility', 'customerVisibility', 'rewardStageId', 'model UserAllowedGroup']) assert.ok(schema.includes(marker), `schema marker ${marker}`);
+assert.ok(seed.includes('CUSTOMER_GROUP_SEED_KEY'), 'customer groups use a one-time seed marker');
+assert.equal(seed.includes('customerGroup.upsert'), false, 'customer groups are not re-upserted by seed');
 for (const marker of ['CREATE TABLE "Activity"', 'CREATE TABLE "Reminder"', 'CREATE TABLE "Notification"', 'automationKey']) assert.ok(migration.includes(marker), `migration marker ${marker}`);
 for (const marker of ['DROP INDEX "PartnerReward_groupId_customerId_period_key"', 'PartnerReward_groupId_customerId_key']) assert.ok(rewardMigration.includes(marker), `reward migration marker ${marker}`);
 for (const marker of ['RENAME COLUMN "read" TO "isRead"', 'ADD COLUMN "readAt"', 'Notification_userId_isRead_createdAt_idx']) assert.ok(notificationMigration.includes(marker), `notification migration marker ${marker}`);

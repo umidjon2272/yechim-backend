@@ -257,6 +257,13 @@ model CustomerGroup {
   @@index([rewardStageId])
 }
 
+// Tracks one-time seed sections so re-running the seed cannot resurrect data
+// that an administrator intentionally deleted.
+model SeedState {
+  key       String   @id
+  createdAt DateTime @default(now())
+}
+
 model CustomerStageHistory {
   id          String    @id @default(cuid())
   customerId  String

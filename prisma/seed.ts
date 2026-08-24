@@ -16,6 +16,9 @@ const DEFAULT_STAGES = [
   { id: "INSTALLED", label: "O'rnatib bo'ldi", isFinal: true, isSystem: true },
 ];
 
+const CUSTOMER_GROUP_SEED_KEY = "customer-groups-v1";
+const DEFAULT_CUSTOMER_GROUPS = ["VIP", "Bito", "Ilxom aka mijozlari"];
+
 async function main() {
   const team = await prisma.team.upsert({
     where: { name: "Sotuv" },
@@ -113,12 +116,18 @@ async function main() {
     });
   }
 
-  for (const name of ["VIP", "Bito", "Ilxom aka mijozlari"]) {
-    await prisma.customerGroup.upsert({
-      where: { name },
-      update: {},
-      create: { name },
-    });
+  // Customer groups are user-managed data. Seed the initial defaults only
+  // once on a genuinely empty database; never upsert them on every deploy or
+  // `npm run seed`, otherwise an admin deletion would be undone.
+  const groupSeedState = await prisma.seedState.findUnique({ where: { key: CUSTOMER_GROUP_SEED_KEY } });
+  if (!groupSeedState) {
+    const groupCount = await prisma.customerGroup.count();
+    if (groupCount === 0) {
+      await prisma.customerGroup.createMany({
+        data: DEFAULT_CUSTOMER_GROUPS.map((name) => ({ name })),
+      });
+    }
+    await prisma.seedState.create({ data: { key: CUSTOMER_GROUP_SEED_KEY } });
   }
 
   await prisma.programCatalog.upsert({

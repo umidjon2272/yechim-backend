@@ -1,0 +1,5 @@
+-- Historical placeholder only.
+-- The production ledger contains this failed duplicate-init migration, which
+-- was rolled back after `User` already existed. Its obsolete SQL is not
+-- replayed; the current canonical schema is represented by the migrations
+-- tracked in this repository.

@@ -44,7 +44,12 @@ export class GroupsService {
     if (!isAdmin(actor)) throw new ForbiddenException('Guruhni faqat admin boshqarishi mumkin');
     const group = await this.prisma.customerGroup.findUnique({ where: { id } });
     if (!group) throw new NotFoundException('Guruh topilmadi');
-    await this.prisma.customerGroup.delete({ where: { id } });
+    await this.prisma.$transaction(async (tx) => {
+      // Detach only the implicit customer↔group rows first. The customer and
+      // all customer-owned records remain untouched by group deletion.
+      await tx.$executeRaw`DELETE FROM "_CustomerGroups" WHERE "B" = ${id}`;
+      await tx.customerGroup.delete({ where: { id } });
+    });
     return { ok: true };
   }
 

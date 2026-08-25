@@ -294,12 +294,12 @@ model UserAllowedGroup {
 
 model PartnerReward {
   id          String        @id @default(cuid())
-  groupId     String
+  groupId     String?
   customerId  String
   period      String
   amount      Decimal
   completedAt DateTime      @default(now())
-  group       CustomerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group       CustomerGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   customer    Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt

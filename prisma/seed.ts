@@ -17,7 +17,7 @@ const DEFAULT_STAGES = [
 ];
 
 const CUSTOMER_GROUP_SEED_KEY = "customer-groups-v1";
-const DEFAULT_CUSTOMER_GROUPS = ["VIP", "Bito", "Ilxom aka mijozlari"];
+const DEFAULT_CUSTOMER_GROUPS = ["Riyal biznes akademiy", "Xodimlar"];
 
 async function main() {
   const team = await prisma.team.upsert({

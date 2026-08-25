@@ -308,6 +308,12 @@ const deleteGroupsService = new GroupsService({
     findUnique: async () => ({ id: 'delete-group-1', name: 'Test group' }),
     delete: async ({ where }: any) => { deletedGroupId = where.id; return { id: where.id }; },
   },
+  $transaction: async (callback: any) => callback({
+    $executeRaw: async () => 0,
+    customerGroup: {
+      delete: async ({ where }: any) => { deletedGroupId = where.id; return { id: where.id }; },
+    },
+  }),
 } as any);
 assert.deepEqual(await deleteGroupsService.remove('delete-group-1', { role: 'ADMIN' }), { ok: true }, 'admin can delete a group');
 assert.equal(deletedGroupId, 'delete-group-1', 'group delete reaches Prisma');

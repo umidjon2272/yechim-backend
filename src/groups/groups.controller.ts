@@ -13,6 +13,12 @@ export class GroupsController {
     return this.groups.list(query, req.user);
   }
 
+  @RequirePermissions('customers.view')
+  @Get(':id/partner-summary')
+  partnerSummary(@Param('id') id: string, @Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.groups.partnerSummary(id, query, req.user);
+  }
+
   @RequirePermissions('customers.create')
   @Post()
   create(@Body() body: any) {

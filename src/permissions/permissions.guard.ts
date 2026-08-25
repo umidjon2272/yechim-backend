@@ -1,10 +1,12 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
+import { isAdmin, isPartner } from '../common/access';
 import { IS_PUBLIC_KEY } from './public.decorator';
-import { PERMISSIONS_KEY } from './permissions.decorator';
+import { ANY_PERMISSIONS_KEY, PERMISSIONS_KEY } from './permissions.decorator';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -12,6 +14,7 @@ export class PermissionsGuard implements CanActivate {
     private readonly reflector: Reflector,
     private readonly jwt: JwtService,
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -24,28 +27,44 @@ export class PermissionsGuard implements CanActivate {
 
     let payload: any;
     try {
-      payload = await this.jwt.verifyAsync(token, { secret: process.env.JWT_SECRET || 'dev-access-secret' });
+      const secret = this.config.get<string>('JWT_SECRET');
+      if (!secret && this.config.get<string>('NODE_ENV') === 'production') {
+        throw new Error('JWT_SECRET production muhitida majburiy');
+      }
+      payload = await this.jwt.verifyAsync(token, { secret: secret || 'dev-access-secret' });
     } catch {
       throw new UnauthorizedException('Sessiya muddati tugagan');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      include: { team: true, allowedCustomerGroups: true },
-    });
-    if (!user || user.status !== 'active') throw new UnauthorizedException('Foydalanuvchi faol emas');
+    const session = payload.sid
+      ? await this.prisma.userSession.findUnique({
+          where: { id: payload.sid },
+          include: { user: { include: { team: true, partnerGroup: true } } },
+        })
+      : null;
+    const user = session?.user;
+    if (!session || !user || session.userId !== payload.sub || session.revokedAt || session.expiresAt <= new Date() || user.status !== 'active' || user.isActive === false) {
+      throw new UnauthorizedException('Sessiya faol emas');
+    }
     req.user = user;
 
     const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
-    if (!required.length || ['SUPER_ADMIN', 'ADMIN'].includes(user.role)) return true;
+    const anyRequired = this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [context.getHandler(), context.getClass()]) || [];
+    if ((!required.length && !anyRequired.length) || isAdmin(user)) return true;
+    if (isPartner(user) && (required.some((permission) => permission !== 'customers.view') || anyRequired.some((permission) => permission !== 'customers.view'))) {
+      throw new ForbiddenException('Partner faqat biriktirilgan guruh mijozlarini ko\'rishi mumkin');
+    }
     const own = user.permissions || [];
-    if (required.every((permission) => own.includes(permission))) return true;
+    if (required.every((permission) => own.includes(permission)) && anyRequired.every((permission) => own.includes(permission))) return true;
+    if (anyRequired.length && anyRequired.some((permission) => own.includes(permission)) && required.every((permission) => own.includes(permission))) return true;
     throw new ForbiddenException('Bu amal uchun ruxsat yoq');
   }
 
   private extractToken(req: Request) {
     const header = req.headers.authorization;
     if (header?.startsWith('Bearer ')) return header.slice(7);
-    return (req as any).cookies?.accessToken;
+    // Auth is deliberately header-only. Origin-wide cookies would make two
+    // tabs share one account even when their frontend sessions are separate.
+    return undefined;
   }
 }

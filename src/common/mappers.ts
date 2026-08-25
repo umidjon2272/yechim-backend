@@ -1,4 +1,7 @@
 import { Prisma } from '@prisma/client';
+import { isPartner } from './access';
+
+export const STAGE_STALE_DAYS = Number(process.env.STAGE_STALE_DAYS || 7);
 
 export function toNumber(value: any) {
   if (value == null) return 0;
@@ -7,45 +10,77 @@ export function toNumber(value: any) {
   return Number.isFinite(n) ? n : 0;
 }
 
-export function publicUser(user: any) {
+export function publicUser(user: any, options: { exposePermissions?: boolean } = {}) {
   if (!user) return null;
+  const partner = isPartner(user);
+  const login = user.username || user.login || user.email || user.phone || null;
   return {
     id: user.id,
     name: user.name,
     email: user.email,
-    username: user.username,
+    username: login,
+    login,
     phone: user.phone,
     role: user.role,
-    permissions: user.permissions || [],
+    permissions: partner && !options.exposePermissions ? ['customers.view'] : user.permissions || [],
     customerScope: user.customerScope || 'ALL',
     allowedGroupIds: (user.allowedCustomerGroups || []).map((item: any) => item.groupId),
     status: user.status,
+    isActive: user.isActive !== false,
     avatarUrl: user.avatarUrl,
+    isPartner: partner,
+    partnerGroupId: user.partnerGroupId || null,
+    partnerGroup: user.partnerGroup ? { id: user.partnerGroup.id, name: user.partnerGroup.name } : null,
     team: user.team ? { id: user.team.id, name: user.team.name } : null,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
 }
 
-export function customerDto(customer: any, user?: any) {
+export function customerDto(customer: any, options: { partner?: boolean; partnerGroupId?: string; hideInternalNotes?: boolean } = {}) {
   if (!customer) return null;
+  const now = Date.now();
+  const stageEnteredAt = customer.stageEnteredAt || customer.updatedAt || customer.createdAt;
+  const stageDurationDays = stageEnteredAt ? Math.max(0, Math.floor((now - new Date(stageEnteredAt).getTime()) / 86400000)) : 0;
+  const nextContactAt = customer.nextContactAt || null;
+  const nextContactTime = nextContactAt ? new Date(nextContactAt).getTime() : null;
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const tomorrowStart = todayStart + 86400000;
+  const latestNote = customer.activities?.[0] || null;
   const groups = customer.groups || [];
-  const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(user?.role);
-  const canSee = (permission: string) => !user || isAdmin || user.permissions?.includes(permission);
+  if (options.partner) {
+    return {
+      id: customer.id,
+      name: customer.name,
+      phone: customer.phone,
+      stage: customer.stageId,
+      stageId: customer.stageId,
+      stageLabel: customer.stage?.label || customer.stageId,
+      isCompleted: Boolean(customer.stage?.isFinal),
+      isInstalled: Boolean(customer.stage?.isFinal),
+      rewardAmount: (customer.partnerRewards || []).reduce((sum: number, reward: any) => sum + toNumber(reward.amount), 0),
+    };
+  }
   return {
     id: customer.id,
     name: customer.name,
     firstName: customer.firstName,
     lastName: customer.lastName,
-    ...(canSee('customers.phone.view') ? { phone: customer.phone, phone2: customer.phone2 } : {}),
+    phone: customer.phone,
+    phone2: customer.phone2,
     telegram: customer.telegram,
     email: customer.email,
     service: customer.service,
-    ...(canSee('customers.amount.view') ? { amount: toNumber(customer.amount) } : {}),
-    ...(canSee('customers.deposit.view') ? { deposit: toNumber(customer.deposit) } : {}),
-    notes: customer.notes,
-    note: customer.note,
-    address: customer.address || {},
+    amount: toNumber(customer.amount),
+    depositAmount: customer.depositAmount == null ? null : toNumber(customer.depositAmount),
+    currencyId: customer.currencyId || customer.currency?.id || null,
+    currency: customer.currency ? { id: customer.currency.id, code: customer.currency.code, name: customer.currency.name, symbol: customer.currency.symbol } : null,
+    notes: options.hideInternalNotes ? null : customer.notes,
+    note: options.hideInternalNotes ? null : customer.note,
+    address: customer.address ?? null,
+    latitude: customer.latitude,
+    longitude: customer.longitude,
     birthDate: customer.birthDate,
     telegramUsername: customer.telegramUsername,
     instagram: customer.instagram,
@@ -55,9 +90,22 @@ export function customerDto(customer: any, user?: any) {
     status: customer.status,
     stage: customer.stageId,
     stageId: customer.stageId,
+    stageLabel: customer.stage?.label || customer.stageId,
+    isCompleted: Boolean(customer.stage?.isFinal),
     pipelineId: customer.pipelineId,
     assignedEmployeeId: customer.assignedEmployeeId,
     assignedEmployee: publicUser(customer.assignedEmployee),
+    nextContactAt,
+    lastContactAt: customer.lastContactAt || null,
+    isFollowUpToday: nextContactTime != null && nextContactTime >= todayStart && nextContactTime < tomorrowStart,
+    isFollowUpOverdue: nextContactTime != null && nextContactTime < now,
+    stageEnteredAt,
+    stageDurationDays,
+    isStageStale: stageDurationDays >= STAGE_STALE_DAYS,
+    installationAt: customer.installationAt || null,
+    installerEmployeeId: customer.installerEmployeeId || null,
+    installerEmployee: publicUser(customer.installerEmployee),
+    latestNote: options.hideInternalNotes ? null : latestNote ? { id: latestNote.id, message: latestNote.message, createdAt: latestNote.createdAt, createdBy: publicUser(latestNote.createdBy) } : null,
     groupIds: groups.map((g: any) => g.id),
     groups,
     business: customer.businesses?.[0] ? businessDto(customer.businesses[0]) : null,

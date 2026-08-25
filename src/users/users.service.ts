@@ -1,5 +1,4 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { publicUser, uniqueConflict } from '../common/mappers';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -8,10 +7,8 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
   async updateMe(userId: string, body: any) {
-    if (body.newPassword) {
-      const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
-      const ok = await bcrypt.compare(body.currentPassword || '', user.passwordHash);
-      if (!ok) throw new UnauthorizedException("Joriy parol noto'g'ri");
+    if (body.username !== undefined || body.password !== undefined || body.newPassword !== undefined) {
+      throw new ForbiddenException('Login yoki parolni bu endpoint orqali o\'zgartirib bo\'lmaydi');
     }
     try {
       const updated = await this.prisma.user.update({
@@ -20,15 +17,26 @@ export class UsersService {
           name: body.name,
           phone: body.phone || null,
           email: body.email || null,
-          username: body.username || null,
           avatarUrl: body.avatarUrl || null,
-          ...(body.newPassword ? { passwordHash: await bcrypt.hash(body.newPassword, 12), refreshTokenHash: null } : {}),
         },
-        include: { team: true },
+        include: { team: true, partnerGroup: true },
       });
       return publicUser(updated);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email, telefon yoki login allaqachon mavjud');
+      throw error;
+    }
+  }
+
+  async updateMyLogin(actor: any, value: any) {
+    if (!['ADMIN', 'SUPER_ADMIN'].includes(String(actor?.role || '').toUpperCase())) throw new ForbiddenException('Loginni faqat admin o\'zgartira oladi');
+    const username = String(value || '').trim();
+    if (!/^[a-zA-Z0-9._-]{3,}$/.test(username)) throw new BadRequestException('Login kamida 3 belgi va faqat lotin harflari, raqam, nuqta, tire yoki pastki chiziqdan iborat bo\'lishi kerak');
+    try {
+      const updated = await this.prisma.user.update({ where: { id: actor.id }, data: { username }, include: { team: true, partnerGroup: true } });
+      return publicUser(updated);
+    } catch (error) {
+      if (uniqueConflict(error)) throw new ConflictException('Bu login band');
       throw error;
     }
   }

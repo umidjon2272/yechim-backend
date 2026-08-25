@@ -44,10 +44,18 @@ JWT_SECRET=
 JWT_REFRESH_SECRET=
 JWT_EXPIRES_IN=15m
 JWT_REFRESH_EXPIRES_IN=30d
-FRONTEND_URL=https://your-frontend-domain
+FRONTEND_URL=https://your-project.vercel.app
 ADMIN_EMAIL=
 ADMIN_PASSWORD=
 ```
 
-Run `npm run seed` once after the first deploy to create the default admin,
-`Asosiy savdo` pipeline, and the 9 default customer stages.
+`FRONTEND_URL` must be the exact Vercel origin (no `/` at the end); multiple
+origins may be comma-separated. `JWT_SECRET` and `JWT_REFRESH_SECRET` must be
+long random production-only values. The frontend stores the token pair in each
+tab's `sessionStorage` and sends the access token as `Authorization: Bearer`.
+The backend does not use browser-wide auth cookies; old cookie names are only
+expired as a migration cleanup.
+
+Run `npm run seed` once after the first deploy to create the admin configured
+by `ADMIN_EMAIL`/`ADMIN_PASSWORD`, the `Asosiy savdo` pipeline, and the 9
+default customer stages. There is no built-in production admin password.

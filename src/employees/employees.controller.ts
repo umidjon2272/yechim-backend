@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
-import { CreateEmployeeDto } from './dto';
+import { CreateEmployeeDto, UpdateEmployeePermissionsDto } from './dto';
 import { EmployeesService } from './employees.service';
 
 @Controller('employees')
@@ -21,26 +22,50 @@ export class EmployeesController {
 
   @RequirePermissions('employees.create')
   @Post()
-  create(@Body() dto: CreateEmployeeDto) {
-    return this.employees.create(dto);
+  create(@Body() dto: CreateEmployeeDto, @Req() req: Request & { user?: any }) {
+    return this.employees.create(dto, req.user);
+  }
+
+  @RequirePermissions('employees.edit')
+  @Patch(':id/permissions')
+  updatePermissions(@Param('id') id: string, @Body() dto: UpdateEmployeePermissionsDto, @Req() req: Request & { user?: any }) {
+    return this.employees.updatePermissions(id, dto.permissions, req.user);
   }
 
   @RequirePermissions('employees.edit')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: any) {
-    return this.employees.update(id, body);
+  update(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.employees.update(id, body, req.user);
   }
 
   @RequirePermissions('employees.edit')
   @Post(':id/activate')
-  activate(@Param('id') id: string) {
-    return this.employees.setStatus(id, 'active');
+  activate(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.employees.setStatus(id, 'active', req.user);
   }
 
   @RequirePermissions('employees.edit')
   @Post(':id/deactivate')
-  deactivate(@Param('id') id: string) {
-    return this.employees.setStatus(id, 'inactive');
+  deactivate(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.employees.setStatus(id, 'inactive', req.user);
+  }
+
+  @RequirePermissions('employees.edit')
+  @Post(':id/password-reset')
+  resetPassword(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.employees.resetPassword(id, body.password, req.user);
+  }
+
+  @RequirePermissions('employees.edit')
+  @Patch(':id/credentials')
+  updateCredentials(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.employees.updateCredentials(id, body, req.user);
+  }
+
+  @RequirePermissions('employees.delete')
+  @Delete(':id')
+  remove(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.employees.remove(id, req.user);
   }
 
   @RequirePermissions('employees.view')

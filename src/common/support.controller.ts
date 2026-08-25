@@ -3,6 +3,7 @@ import { Request } from 'express';
 import { Public } from '../permissions/public.decorator';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { SupportService } from './support.service';
+import { ROLE_DEFAULT_PERMISSIONS } from './defaults';
 
 @Controller()
 export class SupportController {
@@ -17,7 +18,10 @@ export class SupportController {
   @RequirePermissions('settings.view')
   @Get('roles')
   roles() {
-    return { items: [{ id: 'ADMIN', name: 'ADMIN', permissions: [] }, { id: 'EMPLOYEE', name: 'EMPLOYEE', permissions: [] }], total: 2 };
+    return {
+      items: ['ADMIN', 'EMPLOYEE'].map((name) => ({ id: name, name, permissions: ROLE_DEFAULT_PERMISSIONS[name] })),
+      total: 2,
+    };
   }
 
   @RequirePermissions('settings.view')
@@ -46,8 +50,8 @@ export class SupportController {
 
   @RequirePermissions('customers.view')
   @Get('meta/customer-options')
-  customerOptions() {
-    return this.support.customerOptions();
+  customerOptions(@Req() req: Request & { user?: any }) {
+    return this.support.customerOptions(req.user);
   }
 
   @RequirePermissions('settings.view')
@@ -74,25 +78,25 @@ export class SupportController {
     return this.support.deleteFieldDef(id);
   }
 
-  @RequirePermissions('settings.view')
+  @RequirePermissions('programs.view')
   @Get('program-catalog')
   programCatalog(@Query() query: any) {
     return this.support.programCatalog(query);
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('programs.create')
   @Post('program-catalog')
   createProgram(@Body() body: any) {
     return this.support.createProgram(body);
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('programs.edit')
   @Patch('program-catalog/:id')
   updateProgram(@Param('id') id: string, @Body() body: any) {
     return this.support.updateProgram(id, body);
   }
 
-  @RequirePermissions('settings.edit')
+  @RequirePermissions('programs.delete')
   @Delete('program-catalog/:id')
   deleteProgram(@Param('id') id: string) {
     return this.support.deleteProgram(id);
@@ -236,34 +240,10 @@ export class SupportController {
     return this.support.createPayment(body, req.user);
   }
 
-  @RequirePermissions('installations.view')
-  @Get('installations')
-  installations(@Query() query: any) {
-    return this.support.installations(query);
-  }
-
-  @RequirePermissions('installations.view')
-  @Get('installations/:id')
-  installation(@Param('id') id: string) {
-    return this.support.installation(id);
-  }
-
-  @RequirePermissions('installations.create')
-  @Post('installations')
-  createInstallation(@Body() body: any) {
-    return this.support.createInstallation(body);
-  }
-
-  @RequirePermissions('installations.edit')
-  @Patch('installations/:id')
-  updateInstallation(@Param('id') id: string, @Body() body: any) {
-    return this.support.updateInstallation(id, body);
-  }
-
   @RequirePermissions('customers.view')
   @Get('messages')
-  messages(@Query('customerId') customerId: string) {
-    return this.support.messages(customerId);
+  messages(@Query('customerId') customerId: string, @Req() req: Request & { user?: any }) {
+    return this.support.messages(customerId, req.user);
   }
 
   @RequirePermissions('customers.edit')
@@ -272,94 +252,10 @@ export class SupportController {
     return this.support.createMessage(body, req.user);
   }
 
-  @RequirePermissions('history.view')
+  @RequirePermissions('dashboard.view')
   @Get('search')
   search(@Query('q') q = '') {
     return this.support.search(q);
-  }
-
-  @RequirePermissions('dashboard.view')
-  @Get('notifications')
-  notifications() {
-    return { items: [], total: 0 };
-  }
-
-  @RequirePermissions('dashboard.view')
-  @Get('notifications/unread-count')
-  unreadCount() {
-    return { count: 0 };
-  }
-
-  @RequirePermissions('dashboard.view')
-  @Post('notifications/:id/read')
-  markRead() {
-    return { ok: true };
-  }
-
-  @RequirePermissions('dashboard.view')
-  @Post('notifications/mark-all-read')
-  markAllRead() {
-    return { ok: true };
-  }
-
-  @RequirePermissions('history.view')
-  @Get('timeline')
-  timeline(@Query() query: any, @Req() req: Request & { user?: any }) {
-    return this.support.timeline(query, req.user);
-  }
-
-  @RequirePermissions('activities.view')
-  @Get('activities')
-  activities(@Query() query: any, @Req() req: Request & { user?: any }) {
-    return this.support.activities(query, req.user);
-  }
-
-  @RequirePermissions('activities.view')
-  @Get('activities/:id')
-  activity(@Param('id') id: string, @Req() req: Request & { user?: any }) {
-    return this.support.activity(id, req.user);
-  }
-
-  @RequirePermissions('activities.create')
-  @Post('activities')
-  createActivity(@Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.support.createActivity(body, req.user);
-  }
-
-  @RequirePermissions('reminders.view')
-  @Get('reminders')
-  reminders(@Query() query: any, @Req() req: Request & { user?: any }) {
-    return this.support.reminders(query, req.user);
-  }
-
-  @RequirePermissions('reminders.create')
-  @Post('reminders')
-  createReminder(@Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.support.createReminder(body, req.user);
-  }
-
-  @RequirePermissions('comments.view')
-  @Get('comments')
-  comments(@Query() query: any, @Req() req: Request & { user?: any }) {
-    return this.support.comments(query, req.user);
-  }
-
-  @RequirePermissions('comments.create')
-  @Post('comments')
-  createComment(@Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.support.createComment(body, req.user);
-  }
-
-  @RequirePermissions('comments.create')
-  @Patch('comments/:id')
-  updateComment(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.support.updateComment(id, body, req.user);
-  }
-
-  @RequirePermissions('comments.create')
-  @Delete('comments/:id')
-  deleteComment(@Param('id') id: string, @Req() req: Request & { user?: any }) {
-    return this.support.deleteComment(id, req.user);
   }
 
   @RequirePermissions('attachments.create')

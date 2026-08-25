@@ -46,13 +46,13 @@ export class CustomersController {
   @RequirePermissions('customers.edit')
   @Patch(':id/stage')
   setStage(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.customers.setStage(id, body.stageId || body.stage, req.user);
+    return this.customers.setStage(id, body.stageId ?? body.stage, body, req.user);
   }
 
   @RequirePermissions('customers.edit')
   @Patch(':id/groups')
   setGroups(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.customers.setGroups(id, body.groupIds || [], req.user);
+    return this.customers.setGroups(id, body.groupIds ?? (body.groupId ? [body.groupId] : []), req.user);
   }
 
   @RequirePermissions('customers.edit')

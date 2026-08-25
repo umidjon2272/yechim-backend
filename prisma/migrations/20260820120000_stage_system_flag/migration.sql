@@ -1,0 +1,15 @@
+ALTER TABLE "Stage" ADD COLUMN "isSystem" BOOLEAN NOT NULL DEFAULT false;
+
+UPDATE "Stage"
+SET "isSystem" = true
+WHERE "id" IN (
+  'NEW',
+  'CONTACTED',
+  'IN_PROGRESS',
+  'FOLLOW_UP',
+  'FUTURE_SALE',
+  'DEPOSIT_RECEIVED',
+  'PAID',
+  'INSTALLATION_REQUIRED',
+  'INSTALLED'
+);

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "YECHIM CRM NestJS API",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && node scripts/ensure-render-entry.cjs",
     "format": "prettier --write \"src/**/*.ts\" \"prisma/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",

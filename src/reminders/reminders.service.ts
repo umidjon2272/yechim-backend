@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { customerScopeWhere, isAdmin, isPartner } from '../common/access';
 
 @Injectable()
 export class RemindersService {
@@ -139,9 +140,9 @@ export class RemindersService {
 
   private async ensureCustomerAccess(customerId: string, user: any) {
     const canViewAll = this.canViewAll(user);
-    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(String(user.role || '').toUpperCase());
+    if (String(user?.role || '').toUpperCase() === 'PARTNER' && !user?.partnerGroupId) throw new ForbiddenException('Partner guruhi biriktirilmagan');
     const customer: any = await this.prisma.customer.findFirst({
-      where: { id: customerId, deletedAt: null, ...(canViewAll ? {} : isPartner ? { groups: { some: { id: user.partnerGroupId } } } : { assignedEmployeeId: user.id }) },
+      where: { AND: [{ id: customerId, deletedAt: null }, canViewAll ? {} : customerScopeWhere(user)] },
       select: { id: true, name: true, assignedEmployeeId: true },
     });
     if (!customer) throw new ForbiddenException('Bu mijozga eslatma qo\'yishga ruxsat yo\'q');
@@ -153,7 +154,7 @@ export class RemindersService {
   }
 
   private ensureNotPartner(user: any) {
-    if (user?.partnerGroupId && !['SUPER_ADMIN', 'ADMIN'].includes(String(user.role).toUpperCase())) {
+    if (isPartner(user)) {
       throw new ForbiddenException('Partner eslatmalarni ko\'ra olmaydi');
     }
   }

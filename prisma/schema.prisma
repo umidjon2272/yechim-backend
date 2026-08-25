@@ -16,6 +16,13 @@ enum Role {
   INSTALLER
   DEVELOPER
   EMPLOYEE
+  PARTNER
+}
+
+enum EmployeeCustomerVisibility {
+  ALL
+  ASSIGNED
+  GROUPS
 }
 
 enum TaskStatus {
@@ -41,8 +48,9 @@ model User {
   passwordHash     String
   role             Role           @default(EMPLOYEE)
   permissions      String[]       @default([])
-  // Kept for the local employee-scope contract; partner/session fields below
-  // remain the canonical production authorization path.
+  customerVisibility EmployeeCustomerVisibility @default(ASSIGNED)
+  // Backward-compatible local scope contract retained alongside the newer
+  // customerVisibility/allowedGroups contract.
   customerScope    String         @default("ALL")
   status           String         @default("active")
   isActive         Boolean        @default(true)
@@ -51,8 +59,10 @@ model User {
   team             Team?          @relation(fields: [teamId], references: [id], onDelete: SetNull)
   partnerGroupId   String?
   partnerGroup     CustomerGroup? @relation("PartnerGroupUsers", fields: [partnerGroupId], references: [id], onDelete: SetNull)
+  allowedGroups    UserAllowedGroup[]
 
   assignedCustomers  Customer[]     @relation("AssignedCustomers")
+  createdCustomers   Customer[]     @relation("CreatedCustomers")
   installerCustomers Customer[]     @relation("CustomerInstallers")
   createdTasks       Task[]         @relation("CreatedTasks")
   assignedTasks      Task[]         @relation("AssignedTasks")
@@ -72,6 +82,7 @@ model User {
   @@index([role])
   @@index([status])
   @@index([partnerGroupId])
+  @@index([customerVisibility])
 }
 
 model UserSession {
@@ -115,6 +126,9 @@ model Stage {
   pipelineId String
   pipeline   Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
   customers  Customer[]
+  rewardGroups CustomerGroup[] @relation("GroupRewardStage")
+  fromStageHistory CustomerStageHistory[] @relation("StageHistoryFrom")
+  toStageHistory   CustomerStageHistory[] @relation("StageHistoryTo")
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
 
@@ -137,6 +151,19 @@ model Currency {
   @@index([isDefault])
 }
 
+model BusinessType {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  isActive  Boolean    @default(true)
+  sortOrder Int        @default(0)
+  customers Customer[]
+  customerLinks CustomerBusinessType[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
 model Customer {
   id                  String          @id @default(cuid())
   name                String
@@ -151,6 +178,11 @@ model Customer {
   depositAmount       Decimal?
   currencyId          String?
   currency            Currency?       @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+  businessTypeId      String?
+  businessType        BusinessType?   @relation(fields: [businessTypeId], references: [id], onDelete: SetNull)
+  businessTypeLinks   CustomerBusinessType[]
+  createdById          String?
+  createdBy            User?           @relation("CreatedCustomers", fields: [createdById], references: [id], onDelete: SetNull)
   notes               String?
   note                String?
   address             Json?
@@ -183,6 +215,7 @@ model Customer {
   tasks               Task[]
   installations       Installation[]
   activities          Activity[]
+  stageHistory        CustomerStageHistory[]
   reminders           Reminder[]
   deletedAt           DateTime?
   createdAt           DateTime        @default(now())
@@ -197,18 +230,71 @@ model Customer {
   @@index([status])
   @@index([deletedAt])
   @@index([currencyId])
+  @@index([businessTypeId])
+  @@index([createdById])
+}
+
+model CustomerBusinessType {
+  customerId     String
+  businessTypeId String
+  createdAt      DateTime     @default(now())
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  businessType   BusinessType @relation(fields: [businessTypeId], references: [id], onDelete: Cascade)
+
+  @@id([customerId, businessTypeId])
+  @@index([businessTypeId])
 }
 
 model CustomerGroup {
   id                       String          @id @default(cuid())
   name                     String          @unique
   partnerRewardPerCustomer Decimal?
+  rewardStageId            String?
+  rewardStage              Stage?          @relation("GroupRewardStage", fields: [rewardStageId], references: [id], onDelete: SetNull)
   customers                Customer[]      @relation("CustomerGroups")
   partnerUsers             User[]          @relation("PartnerGroupUsers")
+  allowedEmployees         UserAllowedGroup[]
+  legacyAllowedEmployees   EmployeeAllowedGroup[] @relation("EmployeeAllowedGroups")
   partnerRewards           PartnerReward[]
-  allowedEmployees         EmployeeAllowedGroup[] @relation("EmployeeAllowedGroups")
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
+
+  @@index([rewardStageId])
+}
+
+// Tracks one-time seed sections so re-running the seed cannot resurrect data
+// that an administrator intentionally deleted.
+model SeedState {
+  key       String   @id
+  createdAt DateTime @default(now())
+}
+
+model CustomerStageHistory {
+  id          String    @id @default(cuid())
+  customerId  String
+  fromStageId String?
+  toStageId   String?
+  fromIsFinal Boolean   @default(false)
+  toIsFinal   Boolean   @default(false)
+  changedAt   DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  fromStage   Stage?    @relation("StageHistoryFrom", fields: [fromStageId], references: [id], onDelete: SetNull)
+  toStage     Stage?    @relation("StageHistoryTo", fields: [toStageId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, changedAt])
+  @@index([customerId, fromIsFinal, toIsFinal])
+}
+
+model UserAllowedGroup {
+  userId    String
+  groupId   String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group     CustomerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+
+  @@id([userId, groupId])
+  @@index([groupId])
 }
 
 model EmployeeAllowedGroup {
@@ -223,12 +309,12 @@ model EmployeeAllowedGroup {
 
 model PartnerReward {
   id          String        @id @default(cuid())
-  groupId     String
+  groupId     String?
   customerId  String
   period      String
   amount      Decimal
   completedAt DateTime      @default(now())
-  group       CustomerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group       CustomerGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   customer    Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt

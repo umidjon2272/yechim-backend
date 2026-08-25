@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
-import { RequirePermissions } from '../permissions/permissions.decorator';
+import { RequireAnyPermission, RequirePermissions } from '../permissions/permissions.decorator';
 import { CustomersService } from './customers.service';
 
 @Controller('customers')
@@ -25,7 +25,7 @@ export class CustomersController {
     return this.customers.create(body, req.user);
   }
 
-  @RequirePermissions('customers.edit')
+  @RequireAnyPermission('customers.edit', 'customers.editCore')
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
     return this.customers.update(id, body, req.user);

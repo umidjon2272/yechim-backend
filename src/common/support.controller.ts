@@ -54,6 +54,24 @@ export class SupportController {
     return this.support.customerOptions(req.user);
   }
 
+  @RequirePermissions('customers.view')
+  @Get('business-types')
+  businessTypes(@Req() req: Request & { user?: any }) {
+    return this.support.businessTypes(req.user);
+  }
+
+  @RequirePermissions('settings.edit')
+  @Post('business-types')
+  createBusinessType(@Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.support.createBusinessType(body, req.user);
+  }
+
+  @RequirePermissions('settings.edit')
+  @Delete('business-types/:id')
+  deleteBusinessType(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.deleteBusinessType(id, req.user);
+  }
+
   @RequirePermissions('settings.view')
   @Get('customer-field-defs')
   fieldDefs(@Query() query: any) {
@@ -134,14 +152,14 @@ export class SupportController {
 
   @RequirePermissions('leads.view')
   @Get('leads')
-  leads(@Query() query: any) {
-    return this.support.leads(query);
+  leads(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.leads(query, req.user);
   }
 
   @RequirePermissions('leads.view')
   @Get('leads/:id')
-  lead(@Param('id') id: string) {
-    return this.support.lead(id);
+  lead(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.lead(id, req.user);
   }
 
   @RequirePermissions('leads.create')
@@ -170,14 +188,14 @@ export class SupportController {
 
   @RequirePermissions('deals.view')
   @Get('deals')
-  deals(@Query() query: any) {
-    return this.support.deals(query);
+  deals(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.deals(query, req.user);
   }
 
   @RequirePermissions('deals.view')
   @Get('deals/:id')
-  deal(@Param('id') id: string) {
-    return this.support.deal(id);
+  deal(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.deal(id, req.user);
   }
 
   @RequirePermissions('deals.create')
@@ -200,8 +218,8 @@ export class SupportController {
 
   @RequirePermissions('deals.view')
   @Get('deals/:dealId/items')
-  dealItems(@Param('dealId') dealId: string) {
-    return this.support.dealItems(dealId);
+  dealItems(@Param('dealId') dealId: string, @Req() req: Request & { user?: any }) {
+    return this.support.dealItems(dealId, req.user);
   }
 
   @RequirePermissions('deals.edit')
@@ -224,14 +242,14 @@ export class SupportController {
 
   @RequirePermissions('payments.view')
   @Get('payments')
-  payments(@Query() query: any) {
-    return this.support.payments(query);
+  payments(@Query() query: any, @Req() req: Request & { user?: any }) {
+    return this.support.payments(query, req.user);
   }
 
   @RequirePermissions('payments.view')
   @Get('payments/:id')
-  payment(@Param('id') id: string) {
-    return this.support.payment(id);
+  payment(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.support.payment(id, req.user);
   }
 
   @RequirePermissions('payments.create')

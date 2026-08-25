@@ -9,6 +9,8 @@ import { UsersService } from '../src/users/users.service';
 import { GroupsService } from '../src/groups/groups.service';
 import { NotificationsService } from '../src/notifications/notifications.service';
 import { TasksService } from '../src/tasks/tasks.service';
+import { customerScopeWhere, isPartner } from '../src/common/access';
+import { SupportService } from '../src/common/support.service';
 
 async function main() {
 const now = new Date();
@@ -43,6 +45,30 @@ const overdueCustomer = customerDto({ ...customer, nextContactAt: yesterday, act
 assert.ok(overdueCustomer, 'overdue customer dto fixture');
 assert.equal(overdueCustomer.isFollowUpOverdue, true, 'overdue follow-up flag');
 
+const creatorRecord = customerDto({
+  ...customer,
+  createdById: 'employee-1',
+  createdBy: { id: 'employee-1', name: 'Abdulaziz', avatarUrl: null },
+});
+assert.equal(creatorRecord.createdBy.name, 'Abdulaziz', 'creator relation is exposed to an allowed viewer');
+assert.equal('createdBy' in customerDto({ ...customer, createdById: 'employee-1', createdBy: { id: 'employee-1', name: 'Abdulaziz' } }, { hideCreator: true }), false, 'creator is hidden when the viewer lacks permission');
+
+let summaryQuery: any;
+const summaryService = new CustomersService({
+  activity: {
+    findMany: async (args: any) => {
+      summaryQuery = args;
+      return [{ id: 'call-1', customerId: 'customer-1', type: 'CALL', message: 'Qo\'ng\'iroq', createdAt: now, createdBy: { id: 'employee-2', name: 'Shuxrat', avatarUrl: null } }];
+    },
+  },
+} as any);
+const summarized = await (summaryService as any).attachActivitySummaries([{ id: 'customer-1' }]);
+assert.ok(summaryQuery.where.type.in.includes('REMINDER_COMPLETED'), 'last-contact query includes completed reminders');
+assert.equal(summarized[0].lastContact.createdBy.name, 'Shuxrat', 'last-contact summary includes the acting employee');
+const mappedLastContact = customerDto(summarized[0], { hideActivitySummary: false });
+assert.equal(mappedLastContact.lastContact.user.name, 'Shuxrat', 'last-contact mapper exposes the acting employee');
+assert.equal(customerDto(summarized[0], { hideLastContact: true }).lastContact, null, 'last-contact summary respects activity visibility');
+
 const partnerCustomer: any = customerDto(
   {
     id: 'partner-customer-1',
@@ -56,6 +82,7 @@ const partnerCustomer: any = customerDto(
     stage: { id: 'INSTALLED', label: "O'rnatib bo'ldi", isFinal: true },
     assignedEmployee: { id: 'employee-1', name: 'Internal employee' },
     groups: [{ id: 'group-1', partnerRewardPerCustomer: 100 }],
+    partnerRewards: [{ groupId: 'group-1', amount: 100 }],
   },
   { partner: true, partnerGroupId: 'group-1' },
 );
@@ -65,8 +92,44 @@ assert.deepEqual(
   'partner response is minimal',
 );
 assert.equal(partnerCustomer.isInstalled, true, 'partner installation status');
+assert.equal(partnerCustomer.rewardAmount, 100, 'partner card shows own reward amount');
 assert.equal('amount' in partnerCustomer, false, 'partner cannot see sales amount');
 assert.equal('assignedEmployee' in partnerCustomer, false, 'partner cannot see assignee');
+assert.equal(isPartner({ role: 'EMPLOYEE', partnerGroupId: 'group-1' }), false, 'employee with a legacy group is not a partner');
+assert.equal(isPartner({ role: 'PARTNER', partnerGroupId: 'group-1' }), true, 'explicit partner role is required');
+const employeeScope = customerScopeWhere({ role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'] });
+assert.deepEqual(employeeScope.groups, { some: { id: { in: ['group-1'] } } }, 'employee group scope is enforced');
+const hiddenEmployeeCustomer = customerDto(
+  { id: 'employee-customer-1', name: 'Scoped client', phone: '+998901234567', amount: 100, depositAmount: 20, stageId: 'NEW', stage: { id: 'NEW', label: 'Yangi', isFinal: false }, groups: [], createdAt: now, updatedAt: now },
+  { fieldVisibility: { phone: true, amount: false, deposit: false } },
+);
+assert.equal('amount' in hiddenEmployeeCustomer, false, 'employee amount field is removed from DTO');
+assert.equal('depositAmount' in hiddenEmployeeCustomer, false, 'employee deposit field is removed from DTO');
+const hiddenFinancialCustomer = customerDto(
+  { ...customer, amount: 100, depositAmount: 20, currencyId: 'currency-uzs', currency: { id: 'currency-uzs', code: 'UZS', symbol: "so'm" } },
+  { fieldVisibility: { financial: false, amount: true, deposit: true } },
+);
+assert.equal('amount' in hiddenFinancialCustomer, false, 'financial master permission removes amount');
+assert.equal('depositAmount' in hiddenFinancialCustomer, false, 'financial master permission removes deposit');
+assert.equal('currency' in hiddenFinancialCustomer, false, 'financial master permission removes currency');
+
+let customerOptionsWhere: any;
+const supportService = new SupportService({
+  customer: {
+    findMany: async ({ where }: any) => {
+      customerOptionsWhere = where;
+      return [{ stageId: 'NEW', amount: 250, currency: { id: 'currency-uzs', code: 'UZS', symbol: "so'm" }, address: null, service: null, programs: [] }];
+    },
+  },
+  stage: { findMany: async () => [{ id: 'NEW', label: 'Yangi' }] },
+} as any);
+const scopedOptions = await supportService.customerOptions({ role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'], permissions: [] });
+assert.deepEqual(customerOptionsWhere.AND[1].groups, { some: { id: { in: ['group-1'] } } }, 'customer options use employee group scope');
+assert.equal('stageTotals' in scopedOptions, false, 'pipeline totals are omitted without the dedicated permission');
+const permittedOptions = await supportService.customerOptions({ role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'], permissions: ['customers.viewPipelineTotal'] });
+assert.equal(permittedOptions.stageTotals.NEW[0].amount, 250, 'pipeline totals are returned only with the dedicated permission');
+const masterFinancialOptions = await supportService.customerOptions({ role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'], permissions: ['customers.viewFinancials'] });
+assert.equal(masterFinancialOptions.stageTotals.NEW[0].amount, 250, 'financial master permission exposes pipeline total');
 
 const employeeService = new EmployeesService({} as any);
 const adminActor = { id: 'admin-1', role: 'ADMIN' };
@@ -100,6 +163,7 @@ assert.deepEqual(scopedCustomerWhere.groups, { some: { id: 'other-group' } }, 'a
 
 let adminCustomerCreatePayload: any;
 let adminCustomerUpdatePayload: any;
+const adminCustomerActivityPayloads: any[] = [];
 const adminCustomerRecord: any = {
   id: 'admin-customer-1', name: 'Admin client', phone: '+998901111111', stageId: 'NEW',
   stage: { id: 'NEW', label: 'Yangi', isFinal: false }, groups: [], activities: [],
@@ -114,11 +178,15 @@ const adminCustomerService = new CustomersService({
     findUnique: async () => ({ ...adminCustomerRecord, groups: [], stage: { id: 'NEW', isFinal: false } }),
     update: async ({ data }: any) => { adminCustomerUpdatePayload = data; return { ...adminCustomerRecord, groups: [{ id: 'group-2' }] }; },
   },
-  activity: { create: async ({ data }: any) => data },
+  activity: { create: async ({ data }: any) => { adminCustomerActivityPayloads.push(data); return data; } },
   task: { create: async () => ({ id: 'automation-task-1' }) },
 } as any);
-await adminCustomerService.create({ name: 'Admin client', groupId: 'group-1' }, { id: 'admin-1', role: 'ADMIN', partnerGroupId: 'stale-partner-group', permissions: [] });
+await adminCustomerService.create({ name: 'Admin client', groupId: 'group-1', depositAmount: 2500, createdById: 'forged-user-id' }, { id: 'admin-1', name: 'Admin', role: 'ADMIN', partnerGroupId: 'stale-partner-group', permissions: [] });
 assert.deepEqual(adminCustomerCreatePayload.groups, { connect: [{ id: 'group-1' }] }, 'admin can assign a customer to any group');
+assert.equal(Number(adminCustomerCreatePayload.depositAmount), 2500, 'deposit amount is persisted through the existing field');
+assert.equal(adminCustomerCreatePayload.createdById, 'admin-1', 'customer creator is taken from the authenticated actor');
+assert.equal(adminCustomerActivityPayloads.find((item) => item.type === 'CUSTOMER_CREATED')?.metadata.createdById, 'admin-1', 'creation activity stores creator id');
+assert.equal(adminCustomerActivityPayloads.find((item) => item.type === 'CUSTOMER_CREATED')?.metadata.createdByName, 'Admin', 'creation activity stores creator name snapshot');
 await adminCustomerService.update('admin-customer-1', { groupIds: ['group-2'] }, { id: 'admin-1', role: 'ADMIN', partnerGroupId: 'stale-partner-group', permissions: [] });
 assert.deepEqual(adminCustomerUpdatePayload.groups, { set: [{ id: 'group-2' }] }, 'admin can change the customer group relation');
 
@@ -234,6 +302,27 @@ assert.ok(notificationReadData.readAt, 'notification read action stores readAt')
 await notificationsService.markAllRead({ id: 'employee-1' });
 assert.equal(notificationReadAllData.isRead, true, 'read-all action persists');
 
+let deletedGroupId: string | undefined;
+const deleteGroupsService = new GroupsService({
+  customerGroup: {
+    findUnique: async () => ({ id: 'delete-group-1', name: 'Test group' }),
+    delete: async ({ where }: any) => { deletedGroupId = where.id; return { id: where.id }; },
+  },
+  $transaction: async (callback: any) => callback({
+    $executeRaw: async () => 0,
+    customerGroup: {
+      delete: async ({ where }: any) => { deletedGroupId = where.id; return { id: where.id }; },
+    },
+  }),
+} as any);
+assert.deepEqual(await deleteGroupsService.remove('delete-group-1', { role: 'ADMIN' }), { ok: true }, 'admin can delete a group');
+assert.equal(deletedGroupId, 'delete-group-1', 'group delete reaches Prisma');
+await assert.rejects(
+  () => deleteGroupsService.remove('delete-group-1', { role: 'EMPLOYEE', permissions: ['customers.delete'] }),
+  /Guruhni faqat admin/,
+  'employee cannot delete a group even with a forged permission',
+);
+
 const period = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 const rewardRows = Array.from({ length: 30 }, (_, index) => ({
   id: `reward-${index + 1}`, groupId: 'group-1', customerId: `customer-${index + 1}`, period, amount: 100,
@@ -248,6 +337,56 @@ const partnerSummary = await groupsService.partnerSummary('group-1', { period },
 assert.equal(partnerSummary.completedCustomers, 30, 'partner summary counts completed customers');
 assert.equal(partnerSummary.payableAmount, 3000, '30 completed customers at 100 equals 3000');
 await assert.rejects(() => groupsService.partnerSummary('other-group', { period }, { id: 'partner-1', role: 'PARTNER', partnerGroupId: 'group-1' }), /Faqat/);
+const customSummary = await groupsService.partnerSummary('group-1', { from: '2026-08-01', to: '2026-08-31' }, { id: 'partner-1', role: 'PARTNER', partnerGroupId: 'group-1' });
+assert.equal(customSummary.period, '2026-08-01..2026-08-31', 'partner custom date range is accepted');
+
+const rewardUpserts: any[] = [];
+const rewardService = new CustomersService({
+  customer: { findUnique: async () => ({ id: 'reward-customer', stageId: 'PAID', stage: { id: 'PAID', isFinal: false }, groups: [{ id: 'group-1', rewardStageId: 'PAID', partnerRewardPerCustomer: 100 }] }) },
+  customerStageHistory: { findFirst: async () => null },
+  partnerReward: { upsert: async (args: any) => { rewardUpserts.push(args); return args; } },
+} as any);
+await (rewardService as any).syncPartnerReward('reward-customer', now);
+assert.equal(rewardUpserts.length, 1, 'configured reward stage creates one reward transaction');
+assert.deepEqual(rewardUpserts[0].where.groupId_customerId, { groupId: 'group-1', customerId: 'reward-customer' }, 'reward transaction has a database unique key');
+
+const finalHistoryRewardUpserts: any[] = [];
+const finalHistoryRewardService = new CustomersService({
+  customer: { findUnique: async () => ({ id: 'returned-customer', stageId: 'PAID', stage: { id: 'PAID', isFinal: false }, groups: [{ id: 'group-1', rewardStageId: 'PAID', partnerRewardPerCustomer: 100 }] }) },
+  customerStageHistory: { findFirst: async () => ({ id: 'completed-transition' }) },
+  partnerReward: { upsert: async (args: any) => { finalHistoryRewardUpserts.push(args); return args; } },
+} as any);
+await (finalHistoryRewardService as any).syncPartnerReward('returned-customer', now);
+assert.equal(finalHistoryRewardUpserts.length, 0, 'a customer with prior final history cannot earn a new reward');
+await (rewardService as any).syncPartnerReward('reward-customer', now, true);
+assert.equal(rewardUpserts.length, 1, 'moving back from a final stage never creates a duplicate reward');
+
+const employeeCreateService = new CustomersService({} as any);
+assert.deepEqual(await (employeeCreateService as any).resolveCreateGroupIds({ currentGroupId: 'group-1' }, { role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'] }), ['group-1'], 'employee create auto-assigns current group');
+await assert.rejects(() => (employeeCreateService as any).resolveCreateGroupIds({ groupId: 'other-group' }, { role: 'EMPLOYEE', customerVisibility: 'GROUPS', allowedGroupIds: ['group-1'] }), /ruxsat berilgan guruh/);
+const quickActionCalls: any[] = [];
+const quickActionService = new CustomersService({
+  reminder: {
+    updateMany: async () => ({ count: 0 }),
+    create: async ({ data }: any) => { quickActionCalls.push({ kind: 'reminder', data }); return { id: 'quick-reminder-1', ...data }; },
+  },
+  customer: { update: async ({ data }: any) => { quickActionCalls.push({ kind: 'customer', data }); return data; } },
+  task: { create: async ({ data }: any) => { quickActionCalls.push({ kind: 'task', data }); return { id: 'quick-task-1', ...data }; } },
+  activity: { create: async ({ data }: any) => { quickActionCalls.push({ kind: 'activity', data }); return data; } },
+} as any);
+await (quickActionService as any).persistQuickActions(
+  { id: 'customer-quick', name: 'Quick client', assignedEmployeeId: 'employee-1' },
+  [
+    { type: 'CALL', remindAt: todayAtThree.toISOString(), note: 'Qo\'ng\'iroq' },
+    { type: 'REMINDER', remindAt: todayAtThree.toISOString(), note: 'Keyingi sotuv' },
+    { type: 'TASK', title: 'Hujjat yuborish', dueDate: '2026-08-21', note: 'Email orqali' },
+    { type: 'NOTE', text: 'Mijoz bilan kelishildi' },
+  ],
+  { id: 'employee-1', role: 'EMPLOYEE', permissions: ['calls.create', 'reminders.create', 'tasks.create', 'comments.create'] },
+);
+assert.equal(quickActionCalls.filter((item) => item.kind === 'reminder').length, 2, 'create flow persists call and reminder actions');
+assert.equal(quickActionCalls.filter((item) => item.kind === 'task').length, 1, 'create flow persists task action');
+assert.equal(quickActionCalls.filter((item) => item.kind === 'activity').length >= 3, true, 'create flow persists task and note timeline activities');
 
 let activityCreatePayload: any;
 const activityPrisma: any = {
@@ -262,15 +401,26 @@ assert.equal(activityCreatePayload.type, 'NOTE', 'note activity type');
 assert.equal(activityCreatePayload.message, 'Izoh: Narxni kelishadi', 'note timeline message');
 
 const schema = readFileSync('prisma/schema.prisma', 'utf8');
+const seed = readFileSync('prisma/seed.ts', 'utf8');
 const migration = readFileSync('prisma/migrations/20260818150000_reminders_timeline_automation/migration.sql', 'utf8');
 const rewardMigration = readFileSync('prisma/migrations/20260818190000_partner_reward_once_per_customer/migration.sql', 'utf8');
 const notificationMigration = readFileSync('prisma/migrations/20260818200000_notification_contract/migration.sql', 'utf8');
 const permissionCurrencyMigration = readFileSync('prisma/migrations/20260819100000_permissions_currency_comments/migration.sql', 'utf8');
-for (const marker of ['nextContactAt', 'stageEnteredAt', 'installationAt', 'installerEmployeeId', 'model Activity', 'model Reminder', 'model Currency', 'currencyId', 'note', 'model Notification', '@@unique([groupId, customerId])', 'isRead', 'readAt']) assert.ok(schema.includes(marker), `schema marker ${marker}`);
+const scopeMigration = readFileSync('prisma/migrations/20260820150000_partner_employee_scope_reward_trigger/migration.sql', 'utf8');
+const historyMigration = readFileSync('prisma/migrations/20260820160000_customer_stage_history_and_pipeline_total_permission/migration.sql', 'utf8');
+const createdByMigration = readFileSync('prisma/migrations/20260821110000_customer_created_by/migration.sql', 'utf8');
+for (const marker of ['nextContactAt', 'stageEnteredAt', 'installationAt', 'installerEmployeeId', 'model Activity', 'model Reminder', 'model Currency', 'currencyId', 'note', 'model Notification', '@@unique([groupId, customerId])', 'isRead', 'readAt', 'PARTNER', 'EmployeeCustomerVisibility', 'customerVisibility', 'rewardStageId', 'model UserAllowedGroup']) assert.ok(schema.includes(marker), `schema marker ${marker}`);
+assert.ok(seed.includes('CUSTOMER_GROUP_SEED_KEY'), 'customer groups use a one-time seed marker');
+assert.equal(seed.includes('customerGroup.upsert'), false, 'customer groups are not re-upserted by seed');
 for (const marker of ['CREATE TABLE "Activity"', 'CREATE TABLE "Reminder"', 'CREATE TABLE "Notification"', 'automationKey']) assert.ok(migration.includes(marker), `migration marker ${marker}`);
 for (const marker of ['DROP INDEX "PartnerReward_groupId_customerId_period_key"', 'PartnerReward_groupId_customerId_key']) assert.ok(rewardMigration.includes(marker), `reward migration marker ${marker}`);
 for (const marker of ['RENAME COLUMN "read" TO "isRead"', 'ADD COLUMN "readAt"', 'Notification_userId_isRead_createdAt_idx']) assert.ok(notificationMigration.includes(marker), `notification migration marker ${marker}`);
 for (const marker of ['CREATE TABLE "Currency"', 'ADD COLUMN "currencyId"', 'ADD COLUMN "note"', 'currency-uzs']) assert.ok(permissionCurrencyMigration.includes(marker), `permission/currency migration marker ${marker}`);
+for (const marker of ['EmployeeCustomerVisibility', 'UserAllowedGroup', 'rewardStageId']) assert.ok(scopeMigration.includes(marker), `partner/employee migration marker ${marker}`);
+for (const marker of ['CustomerStageHistory', 'fromIsFinal', 'toIsFinal', 'customers.viewPipelineTotal', 'CREATE INDEX']) assert.ok(historyMigration.includes(marker), `stage history/permission migration marker ${marker}`);
+for (const marker of ['createdById', 'ADD COLUMN "createdById"', 'ON DELETE SET NULL']) {
+  assert.ok(schema.includes(marker) || createdByMigration.includes(marker), `creator migration marker ${marker}`);
+}
 
   console.log('CRM feature smoke tests passed: admin/partner scope, group assignment, reward, tasks, notifications, reminders, activities, schema/migrations');
 }

@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { paged, pagination } from '../common/pagination';
+import { customerScopeWhere, isAdmin, isPartner } from '../common/access';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -78,17 +79,27 @@ export class ActivitiesService {
   private dto(item: any, user?: any) {
     const canViewComments = this.canViewComments(user);
     const message = canViewComments ? item.message : String(item.message || '').replace(/\nIzoh:[\s\S]*$/i, '').trim();
-    const metadata = canViewComments ? item.metadata || null : this.hideCommentMetadata(item.metadata);
+    const canViewCreator = isAdmin(user)
+      || item.createdById === user?.id
+      || user?.permissions?.includes('customers.viewCreatedBy')
+      || user?.permissions?.includes('customers.viewAll');
+    const rawMetadata = canViewComments ? item.metadata || null : this.hideCommentMetadata(item.metadata);
+    const metadata = item.type === 'CUSTOMER_CREATED' && !canViewCreator && rawMetadata && typeof rawMetadata === 'object'
+      ? (() => { const { createdById: _createdById, createdByName: _createdByName, ...safe } = rawMetadata; return safe; })()
+      : rawMetadata;
+    const employeeName = item.type === 'CUSTOMER_CREATED'
+      ? canViewCreator ? item.createdBy?.name || item.metadata?.createdByName || null : null
+      : item.createdBy?.name || null;
     return {
       id: item.id,
       type: item.type,
-      title: item.type,
+      title: item.type === 'CUSTOMER_CREATED' ? null : item.type,
       description: message,
       message,
       text: message,
       date: item.createdAt,
       createdAt: item.createdAt,
-      employeeName: item.createdBy?.name || null,
+      employeeName,
       author: item.createdBy ? { id: item.createdBy.id, name: item.createdBy.name, avatarUrl: item.createdBy.avatarUrl } : null,
       metadata,
     };
@@ -97,12 +108,12 @@ export class ActivitiesService {
   private async ensureCustomerAccess(customerId: string, user: any) {
     const role = String(user?.role || '').toUpperCase();
     const canViewAll = ['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(role) || user.permissions?.includes('customers.viewAll');
-    const isPartner = Boolean(user.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(role);
+    if (role === 'PARTNER' && !user?.partnerGroupId) throw new ForbiddenException('Partner guruhi biriktirilmagan');
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: customerId,
         deletedAt: null,
-        ...(canViewAll ? {} : isPartner ? { groups: { some: { id: user.partnerGroupId } } } : { assignedEmployeeId: user.id }),
+        ...(canViewAll ? {} : customerScopeWhere(user)),
       },
       select: { id: true },
     });
@@ -110,7 +121,7 @@ export class ActivitiesService {
   }
 
   private isPartner(user: any) {
-    return Boolean(user?.partnerGroupId) && !['SUPER_ADMIN', 'ADMIN'].includes(String(user?.role || '').toUpperCase());
+    return isPartner(user);
   }
 
   private canViewComments(user: any) {
@@ -118,7 +129,7 @@ export class ActivitiesService {
   }
 
   private isAdmin(user: any) {
-    return ['ADMIN', 'SUPER_ADMIN'].includes(String(user?.role || '').toUpperCase());
+    return isAdmin(user);
   }
 
   private hideCommentMetadata(metadata: any) {

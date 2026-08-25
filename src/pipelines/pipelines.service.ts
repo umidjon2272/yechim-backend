@@ -1,9 +1,13 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { isAdmin } from '../common/access';
 import { DEFAULT_PIPELINE_NAME, DEFAULT_STAGES } from '../common/defaults';
 import { PrismaService } from '../prisma/prisma.service';
 
 const SYSTEM_STAGE_IDS = new Set(DEFAULT_STAGES.map((stage) => stage.id));
+// NEW is the create-flow fallback. A final stage is also protected because
+// completion/reward logic relies on there being one final customer stage.
+const PROTECTED_STAGE_IDS = new Set(['NEW']);
 
 @Injectable()
 export class PipelinesService {
@@ -29,7 +33,8 @@ export class PipelinesService {
     return { items: items.map((stage) => this.stageDto(stage)), total: items.length };
   }
 
-  async createStage(body: any, pipelineId?: string) {
+  async createStage(body: any, pipelineId?: string, actor?: any) {
+    this.assertAdmin(actor);
     const pipeline = pipelineId ? await this.prisma.pipeline.findUnique({ where: { id: pipelineId } }) : await this.defaultPipeline();
     if (!pipeline) throw new NotFoundException('Pipeline topilmadi');
     const label = String(body.name || body.label || '').trim();
@@ -45,7 +50,8 @@ export class PipelinesService {
     return this.stages(pipeline.id).then((res) => res.items.find((s) => s.id === id));
   }
 
-  async updateStage(id: string, body: any) {
+  async updateStage(id: string, body: any, actor?: any) {
+    this.assertAdmin(actor);
     const stage = await this.prisma.stage.findUnique({ where: { id } });
     if (!stage) throw new NotFoundException('Bosqich topilmadi');
     if (body.direction) {
@@ -59,9 +65,11 @@ export class PipelinesService {
       ]);
       return this.stages(stage.pipelineId);
     }
-    this.assertMutable(stage);
     const label = String(body.name || body.label || '').trim();
     if (!label) throw new BadRequestException('Bosqich nomi bo\'sh bo\'lishi mumkin emas');
+    if (this.isSystemStage(stage) && typeof body.isFinal === 'boolean' && body.isFinal !== stage.isFinal) {
+      throw new BadRequestException('Tizim bosqichining yakuniy holatini o\'zgartirib bo\'lmaydi');
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       if (body.isFinal === true) await tx.stage.updateMany({ where: { pipelineId: stage.pipelineId }, data: { isFinal: false } });
       return tx.stage.update({ where: { id }, data: { label, ...(typeof body.isFinal === 'boolean' ? { isFinal: body.isFinal } : {}) } });
@@ -69,7 +77,8 @@ export class PipelinesService {
     return { id: updated.id, label: updated.label, name: updated.label, order: updated.order, isFinal: updated.isFinal, pipelineId: updated.pipelineId };
   }
 
-  async reorder(body: any) {
+  async reorder(body: any, actor?: any) {
+    this.assertAdmin(actor);
     const stageIds: string[] = body.stageIds || body.ids || [];
     if (!stageIds.length) throw new BadRequestException('Bosqichlar tartibi yuborilmadi');
     const stages = await this.prisma.stage.findMany({ where: { id: { in: stageIds } } });
@@ -80,7 +89,8 @@ export class PipelinesService {
     return { ok: true };
   }
 
-  async deleteStage(id: string, replacementStageId?: string) {
+  async deleteStage(id: string, replacementStageId?: string, actor?: any) {
+    this.assertAdmin(actor);
     const stage = await this.prisma.stage.findUnique({ where: { id } });
     if (!stage) throw new NotFoundException('Bosqich topilmadi');
     this.assertMutable(stage);
@@ -119,6 +129,7 @@ export class PipelinesService {
 
   private stageDto(stage: any) {
     const isSystem = this.isSystemStage(stage);
+    const isProtected = this.isProtectedStage(stage);
     return {
       id: stage.id,
       label: stage.label,
@@ -127,7 +138,7 @@ export class PipelinesService {
       isFinal: stage.isFinal,
       isSystem,
       isDefault: isSystem,
-      isProtected: isSystem,
+      isProtected,
       pipelineId: stage.pipelineId,
       customerCount: stage._count?.customers ?? undefined,
     };
@@ -138,7 +149,15 @@ export class PipelinesService {
   }
 
   private assertMutable(stage: any) {
-    if (this.isSystemStage(stage)) throw new BadRequestException('Tizim/default bosqichini o\'zgartirib yoki o\'chirib bo\'lmaydi');
+    if (this.isProtectedStage(stage)) throw new BadRequestException(`"${stage.label}" bosqichi majburiy va o\'chirib bo\'lmaydi`);
+  }
+
+  private isProtectedStage(stage: any) {
+    return PROTECTED_STAGE_IDS.has(stage.id) || Boolean(stage.isFinal);
+  }
+
+  private assertAdmin(actor?: any) {
+    if (!isAdmin(actor)) throw new ForbiddenException('Voronka bosqichlarini faqat admin boshqara oladi');
   }
 
   private slugStage(value: string) {

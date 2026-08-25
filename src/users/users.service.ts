@@ -19,7 +19,7 @@ export class UsersService {
           email: body.email || null,
           avatarUrl: body.avatarUrl || null,
         },
-        include: { team: true, partnerGroup: true },
+        include: { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } },
       });
       return publicUser(updated);
     } catch (error) {
@@ -33,7 +33,7 @@ export class UsersService {
     const username = String(value || '').trim();
     if (!/^[a-zA-Z0-9._-]{3,}$/.test(username)) throw new BadRequestException('Login kamida 3 belgi va faqat lotin harflari, raqam, nuqta, tire yoki pastki chiziqdan iborat bo\'lishi kerak');
     try {
-      const updated = await this.prisma.user.update({ where: { id: actor.id }, data: { username }, include: { team: true, partnerGroup: true } });
+      const updated = await this.prisma.user.update({ where: { id: actor.id }, data: { username }, include: { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } } });
       return publicUser(updated);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Bu login band');

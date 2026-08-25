@@ -16,6 +16,9 @@ const DEFAULT_STAGES = [
   { id: "INSTALLED", label: "O'rnatib bo'ldi", isFinal: true, isSystem: true },
 ];
 
+const CUSTOMER_GROUP_SEED_KEY = "customer-groups-v1";
+const DEFAULT_CUSTOMER_GROUPS = ["Riyal biznes akademiy", "Xodimlar"];
+
 async function main() {
   const team = await prisma.team.upsert({
     where: { name: "Sotuv" },
@@ -93,12 +96,38 @@ async function main() {
     create: { id: "currency-uzs", code: "UZS", name: "O‘zbekiston so‘mi", symbol: "so‘m", isDefault: true },
   });
 
-  for (const name of ["VIP", "Bito", "Ilxom aka mijozlari"]) {
-    await prisma.customerGroup.upsert({
-      where: { name },
-      update: {},
-      create: { name },
+  const businessTypes = [
+    ['business-type-retail', 'Do‘kon / Chakana savdo', 10],
+    ['business-type-restaurant', 'Restoran / Kafe', 20],
+    ['business-type-pharmacy', 'Dorixona', 30],
+    ['business-type-beauty', 'Go‘zallik saloni', 40],
+    ['business-type-services', 'Xizmat ko‘rsatish', 50],
+    ['business-type-manufacturing', 'Ishlab chiqarish', 60],
+    ['business-type-distribution', 'Distribyutsiya', 70],
+    ['business-type-wholesale', 'Ombor / Ulgurji savdo', 80],
+    ['business-type-education', 'O‘quv markazi', 90],
+    ['business-type-other', 'Boshqa', 100],
+  ] as const;
+  for (const [id, name, sortOrder] of businessTypes) {
+    await prisma.businessType.upsert({
+      where: { id },
+      update: { name, isActive: true, sortOrder },
+      create: { id, name, isActive: true, sortOrder },
     });
+  }
+
+  // Customer groups are user-managed data. Seed the initial defaults only
+  // once on a genuinely empty database; never upsert them on every deploy or
+  // `npm run seed`, otherwise an admin deletion would be undone.
+  const groupSeedState = await prisma.seedState.findUnique({ where: { key: CUSTOMER_GROUP_SEED_KEY } });
+  if (!groupSeedState) {
+    const groupCount = await prisma.customerGroup.count();
+    if (groupCount === 0) {
+      await prisma.customerGroup.createMany({
+        data: DEFAULT_CUSTOMER_GROUPS.map((name) => ({ name })),
+      });
+    }
+    await prisma.seedState.create({ data: { key: CUSTOMER_GROUP_SEED_KEY } });
   }
 
   await prisma.programCatalog.upsert({

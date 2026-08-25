@@ -21,19 +21,19 @@ export class GroupsController {
 
   @RequirePermissions('customers.create')
   @Post()
-  create(@Body() body: any) {
-    return this.groups.create(body);
+  create(@Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.groups.create(body, req.user);
   }
 
   @RequirePermissions('customers.edit')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: any) {
-    return this.groups.update(id, body);
+  update(@Param('id') id: string, @Body() body: any, @Req() req: Request & { user?: any }) {
+    return this.groups.update(id, body, req.user);
   }
 
   @RequirePermissions('customers.delete')
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.groups.remove(id);
+  remove(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+    return this.groups.remove(id, req.user);
   }
 }

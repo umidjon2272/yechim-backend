@@ -5,6 +5,8 @@ import { ALL_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } from '../common/defaults';
 import { publicUser, taskDto, uniqueConflict } from '../common/mappers';
 import { PrismaService } from '../prisma/prisma.service';
 
+const employeeInclude = { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } } as const;
+
 @Injectable()
 export class EmployeesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -17,13 +19,13 @@ export class EmployeesService {
       : {};
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
-      this.prisma.user.findMany({ where, include: { team: true, partnerGroup: true }, orderBy: { createdAt: 'desc' }, skip, take }),
+      this.prisma.user.findMany({ where, include: employeeInclude, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
     return paged(users.map((u) => publicUser(u, { exposePermissions: true })), total, page, pageSize);
   }
 
   async get(id: string) {
-    const user = await this.prisma.user.findUnique({ where: { id }, include: { team: true, partnerGroup: true } });
+    const user = await this.prisma.user.findUnique({ where: { id }, include: employeeInclude });
     if (!user) throw new NotFoundException('Xodim topilmadi');
     return publicUser(user, { exposePermissions: true });
   }
@@ -39,7 +41,8 @@ export class EmployeesService {
     if (!/^[a-zA-Z0-9._-]{3,}$/.test(username)) throw new BadRequestException('Login kamida 3 belgi va faqat lotin harflari, raqam, nuqta, tire yoki pastki chiziqdan iborat bo\'lishi kerak');
     if (password.length < 6) throw new BadRequestException('Parol kamida 6 belgidan iborat bo\'lishi kerak');
     try {
-      const role = (body.role || 'EMPLOYEE').toUpperCase();
+      const role = this.normalizeRole(body.role || 'EMPLOYEE');
+      const access = await this.normalizeAccess(role, body);
       const user = await this.prisma.user.create({
         data: {
           name,
@@ -47,14 +50,16 @@ export class EmployeesService {
           phone,
           username,
           passwordHash: await bcrypt.hash(password, 12),
-          role: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES', 'SUPPORT', 'INSTALLER', 'DEVELOPER', 'EMPLOYEE'].includes(role) ? role : 'EMPLOYEE',
-          permissions: this.sanitizePermissions(body.permissions ?? ROLE_DEFAULT_PERMISSIONS[role] ?? ROLE_DEFAULT_PERMISSIONS.EMPLOYEE),
+          role,
+          permissions: role === 'PARTNER' ? ['customers.view'] : this.sanitizePermissions(body.permissions ?? ROLE_DEFAULT_PERMISSIONS[role] ?? ROLE_DEFAULT_PERMISSIONS.EMPLOYEE),
+          customerVisibility: access.visibility,
           status: body.status || 'active',
           isActive: body.isActive !== false && body.status !== 'inactive',
           teamId: body.teamId || null,
-          partnerGroupId: body.partnerGroupId || null,
+          partnerGroupId: access.partnerGroupId,
+          allowedGroups: access.allowedGroupIds.length ? { create: access.allowedGroupIds.map((groupId) => ({ groupId })) } : undefined,
         } as any,
-        include: { team: true, partnerGroup: true },
+        include: employeeInclude,
       });
       const loginUrl = `${String(process.env.FRONTEND_URL || 'https://yechim-crm.vercel.app').split(',')[0].trim().replace(/\/$/, '')}/login`;
       return { employee: publicUser(user, { exposePermissions: true }), credentials: { login: username, password }, loginUrl };
@@ -71,19 +76,31 @@ export class EmployeesService {
       throw new ForbiddenException('Xodim login yoki parolini o\'zgartira olmaydi');
     }
     try {
+      const current: any = await this.prisma.user.findUnique({ where: { id }, include: employeeInclude });
+      if (!current) throw new NotFoundException('Xodim topilmadi');
+      const nextRole = this.normalizeRole(body.role ?? current.role);
+      const access = isAdmin
+        ? await this.normalizeAccess(nextRole, {
+            ...body,
+            partnerGroupId: body.partnerGroupId ?? current.partnerGroupId,
+            allowedGroupIds: body.allowedGroupIds ?? current.allowedGroups?.map((item: any) => item.groupId),
+          })
+        : { visibility: current.customerVisibility, partnerGroupId: current.partnerGroupId, allowedGroupIds: current.allowedGroups?.map((item: any) => item.groupId) || [] };
       const data: any = isAdmin
         ? {
             name: body.name,
             email: body.email,
             phone: body.phone,
             username: body.username,
-            role: body.role,
-            permissions: body.permissions,
+            role: nextRole,
+            permissions: nextRole === 'PARTNER' ? ['customers.view'] : body.permissions,
+            customerVisibility: access.visibility,
             status: body.status,
             isActive: body.isActive === undefined && body.status === undefined ? undefined : body.isActive ?? body.status === 'active',
             avatarUrl: body.avatarUrl,
             teamId: body.teamId === '' ? null : body.teamId,
-            partnerGroupId: body.partnerGroupId === '' ? null : body.partnerGroupId,
+            partnerGroupId: access.partnerGroupId,
+            allowedGroups: { deleteMany: {}, create: access.allowedGroupIds.map((groupId) => ({ groupId })) },
           }
         : {
             name: body.name,
@@ -93,8 +110,7 @@ export class EmployeesService {
           };
       Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
       if (data.permissions !== undefined) data.permissions = this.normalizePermissions(data.permissions);
-      if (data.role !== undefined && !['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES', 'SUPPORT', 'INSTALLER', 'DEVELOPER', 'EMPLOYEE'].includes(String(data.role).toUpperCase())) delete data.role;
-      const user = await this.prisma.user.update({ where: { id }, data, include: { team: true, partnerGroup: true } });
+      const user = await this.prisma.user.update({ where: { id }, data, include: employeeInclude });
       if (data.username !== undefined) await this.revokeSessions(id);
       if (data.status === 'inactive' || data.isActive === false) await this.revokeSessions(id);
       return publicUser(user, { exposePermissions: true });
@@ -111,8 +127,8 @@ export class EmployeesService {
 
     const updated = await this.prisma.user.update({
       where: { id },
-      data: { permissions: this.normalizePermissions(permissions) },
-      include: { team: true, partnerGroup: true },
+      data: { permissions: user.role === 'PARTNER' ? ['customers.view'] : this.normalizePermissions(permissions) },
+      include: employeeInclude,
     });
     return publicUser(updated, { exposePermissions: true });
   }
@@ -122,7 +138,7 @@ export class EmployeesService {
     const user = await this.prisma.user.update({
       where: { id },
       data: { status, isActive: status === 'active' },
-      include: { team: true, partnerGroup: true },
+      include: employeeInclude,
     });
     if (status !== 'active') await this.revokeSessions(id);
     return publicUser(user, { exposePermissions: true });
@@ -146,7 +162,7 @@ export class EmployeesService {
           ...(username !== undefined ? { username } : {}),
           ...(password !== undefined ? { passwordHash: await bcrypt.hash(String(password), 12) } : {}),
         },
-        include: { team: true, partnerGroup: true },
+        include: employeeInclude,
       });
       await this.revokeSessions(id);
       return publicUser(user, { exposePermissions: true });
@@ -190,6 +206,36 @@ export class EmployeesService {
   async installations(id: string) {
     const items = await this.prisma.installation.findMany({ where: { assignedEmployeeId: id }, include: { customer: true, business: true, deal: true, assignedEmployee: { include: { team: true } } }, orderBy: { createdAt: 'desc' } });
     return { items, total: items.length };
+  }
+
+  private normalizeRole(value: any) {
+    const role = String(value || 'EMPLOYEE').toUpperCase();
+    const allowed = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'SALES', 'SUPPORT', 'INSTALLER', 'DEVELOPER', 'EMPLOYEE', 'PARTNER'];
+    if (!allowed.includes(role)) throw new BadRequestException('Rol noto\'g\'ri');
+    return role as any;
+  }
+
+  private async normalizeAccess(role: string, body: any) {
+    if (role === 'PARTNER') {
+      const partnerGroupId = String(body.partnerGroupId || '').trim();
+      if (!partnerGroupId) throw new BadRequestException('Partner uchun guruh tanlanishi shart');
+      const group = await this.prisma.customerGroup.findUnique({ where: { id: partnerGroupId }, select: { id: true } });
+      if (!group) throw new BadRequestException('Partner guruhi topilmadi');
+      return { visibility: 'ASSIGNED' as any, partnerGroupId, allowedGroupIds: [] as string[] };
+    }
+
+    const visibility = String(body.customerVisibility || 'ASSIGNED').toUpperCase();
+    if (role !== 'EMPLOYEE') return { visibility: 'ASSIGNED' as any, partnerGroupId: null, allowedGroupIds: [] as string[] };
+    if (!['ALL', 'ASSIGNED', 'GROUPS'].includes(visibility)) throw new BadRequestException('Mijozlar ko\'rinishi noto\'g\'ri');
+    const allowedGroupIds: string[] = Array.isArray(body.allowedGroupIds)
+      ? [...new Set(body.allowedGroupIds.map((value: any) => String(value || '').trim()).filter(Boolean))] as string[]
+      : [];
+    if (visibility === 'GROUPS') {
+      if (!allowedGroupIds.length) throw new BadRequestException('Kamida bitta ruxsat berilgan guruh tanlang');
+      const groups = await this.prisma.customerGroup.findMany({ where: { id: { in: allowedGroupIds } }, select: { id: true } });
+      if (groups.length !== allowedGroupIds.length) throw new BadRequestException('Ruxsat berilgan guruh topilmadi');
+    }
+    return { visibility: visibility as any, partnerGroupId: null, allowedGroupIds: visibility === 'GROUPS' ? allowedGroupIds : [] };
   }
 
   private sanitizePermissions(value: any) {

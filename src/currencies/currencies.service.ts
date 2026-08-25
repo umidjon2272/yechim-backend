@@ -8,7 +8,7 @@ export class CurrenciesService {
 
   async list(actor?: any) {
     const isAdmin = ['ADMIN', 'SUPER_ADMIN'].includes(String(actor?.role || '').toUpperCase());
-    if (actor?.partnerGroupId && !isAdmin) throw new ForbiddenException('Partner valyuta sozlamalarini ko\'ra olmaydi');
+    if (String(actor?.role || '').toUpperCase() === 'PARTNER') throw new ForbiddenException('Partner valyuta sozlamalarini ko\'ra olmaydi');
     const items = await this.prisma.currency.findMany({ where: isAdmin ? {} : { isActive: true }, orderBy: [{ isDefault: 'desc' }, { code: 'asc' }] });
     return { items: items.map((item) => this.dto(item)), total: items.length };
   }

@@ -2,17 +2,20 @@ import { ConflictException, ForbiddenException, Injectable, NotFoundException } 
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { DEFAULT_PIPELINE_NAME } from '../common/defaults';
-import { canViewAll, partnerGroupIdOf } from '../common/access';
+import { canEditCustomerBusinessType, canEditCustomerCore, canViewAll, canViewCustomerAmount, canViewCustomerDeposit, customerScopeWhere, isAdmin, isPartner, partnerGroupIdOf } from '../common/access';
 import { customerDto, uniqueConflict } from '../common/mappers';
 import { paged, pagination } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 
 const includeCustomer = {
   assignedEmployee: { include: { team: true } },
+  createdBy: { include: { team: true } },
   installerEmployee: { include: { team: true } },
   groups: true,
   partnerRewards: true,
   currency: true,
+  businessType: true,
+  businessTypeLinks: { include: { businessType: true } },
   businesses: true,
   stage: true,
   activities: {
@@ -21,7 +24,25 @@ const includeCustomer = {
     take: 1,
     include: { createdBy: { include: { team: true } } },
   },
+  reminders: {
+    where: { status: 'PENDING' },
+    orderBy: { remindAt: 'asc' },
+    take: 1,
+    select: { id: true, type: true, title: true, note: true, remindAt: true, status: true },
+  },
 } as const;
+
+// List cards do not need the full customer relation graph. Keeping this
+// include separate prevents a paginated list from materialising every
+// business/activity/reminder relation for each row.
+const listIncludeCustomer = {
+  ...includeCustomer,
+  businesses: { take: 1, orderBy: { createdAt: 'asc' as const } },
+  partnerRewards: true,
+} as const;
+
+// A real customer touchpoint, not an internal state change or a reminder plan.
+const LAST_CONTACT_ACTIVITY_TYPES = ['CALL', 'FOLLOW_UP', 'MEETING', 'DEMO', 'NOTE', 'REMINDER_COMPLETED'];
 
 @Injectable()
 export class CustomersService {
@@ -30,61 +51,80 @@ export class CustomersService {
   async list(query: any, actor?: any) {
     const { page, pageSize } = pagination(query);
     const search = String(query.search || '').trim().toLowerCase();
-    const baseWhere: any = { deletedAt: null };
-    const partnerGroupId = this.partnerGroupId(actor);
-    // A partner is scoped by the assigned group, never by employee ownership.
-    // Applying both filters made group customers disappear unless they were
-    // also assigned to the partner account.
-    if (!this.canViewAll(actor) && !partnerGroupId) Object.assign(baseWhere, this.employeeScopeWhere(actor));
+    this.ensurePartnerConfigured(actor);
+    const scopeWhere = customerScopeWhere(actor);
+    const baseWhere: any = { deletedAt: null, ...scopeWhere };
+    const andFilters: any[] = [];
+    if (search) {
+      andFilters.push({
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+          { email: { contains: search, mode: 'insensitive' } },
+        ],
+      });
+    }
     if (query.status) baseWhere.status = query.status;
     if (query.stage) baseWhere.stageId = query.stage;
     if (query.assignedEmployeeId && (this.canViewAll(actor) || query.assignedEmployeeId === actor?.id)) baseWhere.assignedEmployeeId = query.assignedEmployeeId;
-    if (partnerGroupId) baseWhere.groups = { some: { id: partnerGroupId } };
-    else if (query.groupId) baseWhere.groups = { some: { id: query.groupId } };
+    if (query.groupId) {
+      const requestedGroupWhere = { groups: { some: { id: String(query.groupId) } } };
+      if (baseWhere.groups) {
+        andFilters.push({ groups: baseWhere.groups }, requestedGroupWhere);
+        delete baseWhere.groups;
+      } else baseWhere.groups = requestedGroupWhere.groups;
+    }
     if (query.createdFrom || query.createdTo) {
-      baseWhere.createdAt = {};
-      if (query.createdFrom) baseWhere.createdAt.gte = new Date(query.createdFrom);
-      if (query.createdTo) baseWhere.createdAt.lte = new Date(`${query.createdTo}T23:59:59.999Z`);
+      const createdAt: any = {};
+      if (query.createdFrom) createdAt.gte = new Date(query.createdFrom);
+      if (query.createdTo) createdAt.lte = new Date(`${query.createdTo}T23:59:59.999Z`);
+      baseWhere.createdAt = createdAt;
     }
-    let customers = await this.prisma.customer.findMany({ where: baseWhere, include: includeCustomer });
-    if (search) {
-      customers = customers.filter((c) => [c.name, c.phone, c.email].filter(Boolean).some((v) => String(v).toLowerCase().includes(search)));
+    if (query.city) {
+      andFilters.push({ address: { path: ['city'], equals: String(query.city) } });
     }
-    if (query.city) customers = customers.filter((c) => (c.address as any)?.city === query.city);
-    if (query.program) customers = customers.filter((c) => c.service === query.program || (Array.isArray(c.programs) && c.programs.some((p: any) => p.name === query.program)));
+    if (query.installationStatus) {
+      andFilters.push({ installations: { some: { status: String(query.installationStatus) } } });
+    }
+    if (andFilters.length) baseWhere.AND = andFilters;
     const sort = String(query.sort || '-createdAt');
-    customers.sort((a: any, b: any) => {
-      if (sort === 'nextContactAt') return this.contactOrder(a, b);
-      if (sort === '-createdAt') {
-        const contactOrder = this.contactOrder(a, b);
-        if (contactOrder !== 0) return contactOrder;
-      }
-      const key = sort.replace('-', '');
-      const av = key === 'name' ? a.name : new Date(a.createdAt).getTime();
-      const bv = key === 'name' ? b.name : new Date(b.createdAt).getTime();
-      return sort.startsWith('-') ? (av < bv ? 1 : -1) : av > bv ? 1 : -1;
-    });
-    const start = (page - 1) * pageSize;
-    return paged(customers.slice(start, start + pageSize).map((customer) => this.dto(customer, actor)), customers.length, page, pageSize);
+    const orderBy = sort === 'name'
+      ? { name: 'asc' as const }
+      : sort === '-name'
+        ? { name: 'desc' as const }
+        : sort === 'nextContactAt'
+          ? { nextContactAt: 'asc' as const }
+          : sort === 'createdAt'
+            ? { createdAt: 'asc' as const }
+            : { createdAt: 'desc' as const };
+    const customersPromise = this.prisma.customer.findMany({ where: baseWhere, include: listIncludeCustomer, orderBy, skip: (page - 1) * pageSize, take: pageSize });
+    const totalPromise = typeof this.prisma.customer.count === 'function'
+      ? this.prisma.customer.count({ where: baseWhere })
+      : customersPromise.then((items: any[]) => items.length);
+    const [customers, total] = await Promise.all([customersPromise, totalPromise]);
+    const customersWithSummaries = await this.attachActivitySummaries(customers);
+    return paged(customersWithSummaries.map((customer) => this.dto(customer, actor)), total, page, pageSize);
   }
 
   async get(id: string, actor?: any) {
-    const partnerGroupId = this.partnerGroupId(actor);
+    this.ensurePartnerConfigured(actor);
     const customer = await this.prisma.customer.findFirst({
-      where: { id, deletedAt: null, ...this.ownershipWhere(actor), ...(partnerGroupId ? { groups: { some: { id: partnerGroupId } } } : {}) },
+      where: { AND: [{ id, deletedAt: null }, customerScopeWhere(actor)] },
       include: includeCustomer,
     });
     if (!customer) throw new NotFoundException('Mijoz topilmadi');
-    return this.dto(customer, actor);
+    const [customerWithSummary] = await this.attachActivitySummaries([customer]);
+    return this.dto(customerWithSummary, actor);
   }
 
   async create(body: any, actor?: any) {
+    this.ensurePartnerCannotWrite(actor);
     const pipeline = await this.defaultPipeline();
     const stageId = await this.resolveStageId(body.stageId ?? body.stage ?? 'NEW');
     const programs = this.normalizePrograms(body.programs);
-    const scopedPartnerGroupId = this.partnerGroupId(actor);
-    const requestedGroupIds = scopedPartnerGroupId ? [scopedPartnerGroupId] : this.normalizeGroupIds(body.groupIds, body.groupId);
-    const currencyId = await this.resolveCurrencyId(body.currencyId, body.currencyCode);
+    const requestedGroupIds = await this.resolveCreateGroupIds(body, actor);
+    const businessTypeIds = await this.resolveBusinessTypeIds(body.businessTypeIds, body.businessTypeId);
+    const currencyId = canViewCustomerAmount(actor) ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : null;
     try {
       const customer = await this.prisma.customer.create({
         data: {
@@ -96,9 +136,15 @@ export class CustomersService {
           telegram: body.telegram || null,
           email: body.email || null,
           service: body.service || programs[0]?.name || null,
-          amount: this.optionalNumber(body.amount) ?? 0,
-          depositAmount: this.optionalNumber(body.depositAmount),
+          amount: this.canViewField(actor, 'amount') ? this.optionalNumber(body.amount) ?? 0 : 0,
+          depositAmount: this.canViewField(actor, 'deposit') ? this.optionalNumber(body.depositAmount) : null,
           currencyId,
+          // Keep the legacy scalar synchronized with the first selected type
+          // while the join table stores the complete multi-select.
+          businessTypeId: businessTypeIds[0] || null,
+          businessTypeLinks: businessTypeIds.length
+            ? { create: businessTypeIds.map((businessTypeId) => ({ businessType: { connect: { id: businessTypeId } } })) }
+            : undefined,
           notes: body.notes || body.note || null,
           note: body.note || body.notes || null,
           address: body.address === undefined || body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -114,6 +160,9 @@ export class CustomersService {
           pipelineId: body.pipelineId || pipeline.id,
           stageId,
           assignedEmployeeId: this.canViewAll(actor) ? body.assignedEmployeeId || null : actor?.id || null,
+          // The creator is always taken from the authenticated request actor;
+          // a client-supplied body.createdById is deliberately ignored.
+          createdById: actor?.id || null,
           nextContactAt: body.nextContactAt ? this.toDate(body.nextContactAt) : null,
           stageEnteredAt: new Date(),
           installationAt: body.installationAt ? this.toDate(body.installationAt) : null,
@@ -122,11 +171,19 @@ export class CustomersService {
         },
         include: includeCustomer,
       });
-      await this.createActivity(customer.id, 'CUSTOMER_CREATED', 'Mijoz yaratildi', actor?.id);
+      await this.createActivity(
+        customer.id,
+        'CUSTOMER_CREATED',
+        'Mijoz yaratildi',
+        actor?.id,
+        { createdById: actor?.id || null, createdByName: actor?.name || null },
+      );
+      await this.recordStageHistory(customer.id, null, customer.stage, customer.createdAt || new Date());
       await this.createStageAutomation(customer, stageId, actor);
       if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL', body.reminderNote ?? body.note ?? body.comment);
-      await this.syncPartnerReward(customer.id, new Date());
-      return this.dto(customer, actor);
+      const quickActionErrors = await this.persistQuickActions(customer, body.quickActions, actor);
+      await this.syncPartnerReward(customer.id, customer.createdAt || new Date());
+      return { ...this.dto(customer, actor), ...(quickActionErrors.length ? { quickActionErrors } : {}) };
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
       throw error;
@@ -134,13 +191,34 @@ export class CustomersService {
   }
 
   async update(id: string, body: any, actor?: any) {
+    this.ensurePartnerCannotWrite(actor);
+    const hasBusinessTypeSelection = body.businessTypeIds !== undefined || body.businessTypeId !== undefined;
+    if (hasBusinessTypeSelection && !canEditCustomerBusinessType(actor)) {
+      throw new ForbiddenException('Biznes turini o\'zgartirishga ruxsat yo\'q');
+    }
+    this.ensureCoreEdit(body, actor);
+    const financialWriteFields = [
+      ['amount', canViewCustomerAmount(actor)],
+      ['currencyId', canViewCustomerAmount(actor)],
+      ['currencyCode', canViewCustomerAmount(actor)],
+      ['depositAmount', canViewCustomerDeposit(actor)],
+    ] as const;
+    if (financialWriteFields.some(([field, allowed]) => body[field] !== undefined && !allowed)) {
+      throw new ForbiddenException('Moliyaviy ma\'lumotlarni o\'zgartirishga ruxsat yo\'q');
+    }
     const current: any = await this.get(id, actor);
+    const businessTypeIds = hasBusinessTypeSelection
+      ? await this.resolveBusinessTypeIds(body.businessTypeIds, body.businessTypeId)
+      : undefined;
     const requestedStage = body.stageId ?? body.stage;
     const nextStageId = requestedStage ? await this.resolveStageId(requestedStage) : undefined;
     const stageChanged = nextStageId && nextStageId !== current.stageId;
     if (!this.canViewAll(actor) && body.assignedEmployeeId !== undefined && body.assignedEmployeeId !== actor?.id && body.assignedEmployeeId !== '') {
       throw new ForbiddenException('Mijozni faqat ozingizga biriktirishingiz mumkin');
     }
+    const requestedGroupIds = Array.isArray(body.groupIds) || body.groupId !== undefined ? this.normalizeGroupIds(body.groupIds, body.groupId) : undefined;
+    if (requestedGroupIds) await this.assertEmployeeGroupWrite(requestedGroupIds, actor);
+    const stageEnteredAt = stageChanged ? new Date() : undefined;
     const data: any = {
       name: body.name,
       firstName: body.firstName,
@@ -150,9 +228,20 @@ export class CustomersService {
       telegram: body.telegram,
       email: body.email === undefined ? undefined : body.email || null,
       service: body.service,
-      amount: body.amount == null ? undefined : this.optionalNumber(body.amount) ?? 0,
-      depositAmount: body.depositAmount === undefined ? undefined : body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount),
-      currencyId: body.currencyId !== undefined || body.currencyCode !== undefined ? await this.resolveCurrencyId(body.currencyId, body.currencyCode) : undefined,
+      amount: body.amount == null || !this.canViewField(actor, 'amount') ? undefined : this.optionalNumber(body.amount) ?? 0,
+      depositAmount: body.depositAmount === undefined || !this.canViewField(actor, 'deposit') ? undefined : body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount),
+      currencyId: (body.currencyId !== undefined || body.currencyCode !== undefined) && canViewCustomerAmount(actor)
+        ? await this.resolveCurrencyId(body.currencyId, body.currencyCode)
+        : undefined,
+      businessTypeId: businessTypeIds === undefined ? undefined : businessTypeIds[0] || null,
+      businessTypeLinks: businessTypeIds === undefined
+        ? undefined
+        : {
+            deleteMany: {},
+            ...(businessTypeIds.length
+              ? { create: businessTypeIds.map((businessTypeId) => ({ businessType: { connect: { id: businessTypeId } } })) }
+              : {}),
+          },
       notes: body.notes ?? body.note,
       note: body.note ?? body.notes,
       address: body.address === undefined ? undefined : body.address === null || body.address === '' ? Prisma.DbNull : body.address,
@@ -166,32 +255,38 @@ export class CustomersService {
       programs: body.programs ? this.normalizePrograms(body.programs) : undefined,
       status: body.status,
       stageId: nextStageId,
-      stageEnteredAt: stageChanged ? new Date() : undefined,
+      stageEnteredAt,
       assignedEmployeeId: body.assignedEmployeeId === '' ? null : body.assignedEmployeeId,
       nextContactAt: body.nextContactAt === undefined ? undefined : body.nextContactAt === null || body.nextContactAt === '' ? null : this.toDate(body.nextContactAt),
       installationAt: body.installationAt === undefined ? undefined : body.installationAt === null || body.installationAt === '' ? null : this.toDate(body.installationAt),
       installerEmployeeId: body.installerEmployeeId === undefined ? undefined : body.installerEmployeeId === '' ? null : body.installerEmployeeId,
-      groups: Array.isArray(body.groupIds) || body.groupId !== undefined
-        ? { set: this.normalizeGroupIds(body.groupIds, body.groupId).map((groupId) => ({ id: groupId })) }
+      groups: requestedGroupIds
+        ? { set: requestedGroupIds.map((groupId) => ({ id: groupId })) }
         : undefined,
     };
     Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
     try {
       const customer = await this.prisma.customer.update({ where: { id }, data, include: includeCustomer });
       if (stageChanged) {
-        await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id);
+        await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id, {
+          fromStageId: current.stageId,
+          toStageId: customer.stageId,
+          fromIsFinal: Boolean(current.isCompleted),
+          toIsFinal: Boolean(customer.stage?.isFinal),
+        });
+        await this.recordStageHistory(customer.id, current.stageId, customer.stage, stageEnteredAt || new Date(), Boolean(current.isCompleted), Boolean(customer.stage?.isFinal));
         await this.createStageAutomation(customer, customer.stageId, actor);
       }
       if (current.assignedEmployeeId !== customer.assignedEmployeeId) await this.createActivity(customer.id, 'ASSIGNED_CHANGED', `Mas'ul xodim o'zgardi`, actor?.id);
       if (Array.isArray(body.groupIds) || body.groupId !== undefined) await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
-      if (body.amount !== undefined && Number(current.amount) !== Number(customer.amount)) await this.createActivity(customer.id, 'AMOUNT_CHANGED', `Summa o'zgardi: ${customer.amount}`, actor?.id);
-      if (body.depositAmount !== undefined && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
+      if (body.amount !== undefined && this.canViewField(actor, 'amount') && Number(current.amount) !== Number(customer.amount)) await this.createActivity(customer.id, 'AMOUNT_CHANGED', `Summa o'zgardi: ${customer.amount}`, actor?.id);
+      if (body.depositAmount !== undefined && this.canViewField(actor, 'deposit') && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
       if (body.nextContactAt !== undefined) {
         if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || 'CALL', body.reminderNote ?? body.note ?? body.comment);
         else await this.cancelPendingReminders(customer.id);
       }
       if (body.installationAt !== undefined || body.installerEmployeeId !== undefined) await this.syncInstallation(customer, actor);
-      if (stageChanged || body.stage || body.stageId) await this.syncPartnerReward(customer.id, new Date());
+      if (stageChanged) await this.syncPartnerReward(customer.id, stageEnteredAt || new Date(), Boolean(current.isCompleted));
       return this.dto(customer, actor);
     } catch (error) {
       if (uniqueConflict(error)) throw new ConflictException('Email yoki telefon allaqachon mavjud');
@@ -216,14 +311,16 @@ export class CustomersService {
   }
 
   async setStage(id: string, stage: string, body: any = {}, actor?: any) {
+    this.ensurePartnerCannotWrite(actor);
     const current: any = await this.get(id, actor);
     const stageId = await this.resolveStageId(stage);
+    const stageEnteredAt = stageId !== current.stageId ? new Date() : undefined;
     const customer = await this.prisma.customer.update({
       where: { id },
       data: {
         stageId,
-        ...(stageId !== current.stageId ? { stageEnteredAt: new Date() } : {}),
-        ...(body.depositAmount !== undefined ? { depositAmount: body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount) } : {}),
+        ...(stageEnteredAt ? { stageEnteredAt } : {}),
+        ...(body.depositAmount !== undefined && this.canViewField(actor, 'deposit') ? { depositAmount: body.depositAmount === '' ? null : this.optionalNumber(body.depositAmount) } : {}),
         ...(body.nextContactAt !== undefined ? { nextContactAt: body.nextContactAt === null || body.nextContactAt === '' ? null : this.toDate(body.nextContactAt) } : {}),
         ...(body.installationAt !== undefined ? { installationAt: body.installationAt === null || body.installationAt === '' ? null : this.toDate(body.installationAt) } : {}),
         ...(body.installerEmployeeId !== undefined ? { installerEmployeeId: body.installerEmployeeId || null } : {}),
@@ -231,29 +328,35 @@ export class CustomersService {
       include: includeCustomer,
     });
     if (stageId !== current.stageId) {
-      await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id);
+      await this.createActivity(customer.id, 'STAGE_CHANGED', `Bosqich o'zgardi: ${current.stage?.label || current.stageId} → ${customer.stage?.label || customer.stageId}`, actor?.id, {
+        fromStageId: current.stageId,
+        toStageId: customer.stageId,
+        fromIsFinal: Boolean(current.isCompleted),
+        toIsFinal: Boolean(customer.stage?.isFinal),
+      });
+      await this.recordStageHistory(customer.id, current.stageId, customer.stage, stageEnteredAt || new Date(), Boolean(current.isCompleted), Boolean(customer.stage?.isFinal));
       await this.createStageAutomation(customer, stageId, actor);
     }
-    if (body.depositAmount !== undefined && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
+    if (body.depositAmount !== undefined && this.canViewField(actor, 'deposit') && Number(current.depositAmount || 0) !== Number(customer.depositAmount || 0)) await this.createActivity(customer.id, 'DEPOSIT_CHANGED', `Zaklad o'zgardi: ${customer.depositAmount || 0}`, actor?.id);
     if (body.nextContactAt !== undefined) {
         if (customer.nextContactAt) await this.scheduleReminder(customer, customer.nextContactAt, actor, body.reminderType || (stageId === 'FOLLOW_UP' ? 'FOLLOW_UP' : 'CALL'), body.reminderNote ?? body.note ?? body.comment);
       else await this.cancelPendingReminders(customer.id);
     }
     if (body.installationAt !== undefined || body.installerEmployeeId !== undefined || stageId === 'INSTALLATION_REQUIRED') await this.syncInstallation(customer, actor);
-    await this.syncPartnerReward(customer.id, new Date());
+    if (stageId !== current.stageId) await this.syncPartnerReward(customer.id, stageEnteredAt || new Date(), Boolean(current.isCompleted));
     return this.dto(customer, actor);
   }
 
   async setGroups(id: string, groupIds: string[], actor?: any) {
-    if (this.partnerGroupId(actor)) throw new ForbiddenException('Partner mijoz guruhini o\'zgartira olmaydi');
+    if (isPartner(actor)) throw new ForbiddenException('Partner mijoz guruhini o\'zgartira olmaydi');
     await this.get(id, actor);
+    await this.assertEmployeeGroupWrite(groupIds, actor);
     const customer = await this.prisma.customer.update({
       where: { id },
       data: { groups: { set: groupIds.map((groupId) => ({ id: groupId })) } },
       include: includeCustomer,
     });
-    await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
-    await this.syncPartnerReward(customer.id, new Date());
+      await this.createActivity(customer.id, 'GROUPS_CHANGED', 'Mijoz guruhlari o\'zgartirildi', actor?.id);
     return this.dto(customer, actor);
   }
 
@@ -264,6 +367,7 @@ export class CustomersService {
       if (stageId) await this.setStage(id, stageId, {}, actor);
       if (body.targetGroupId) {
         await this.get(id, actor);
+        await this.assertEmployeeGroupWrite([String(body.targetGroupId)], actor);
         await this.prisma.customer.update({ where: { id }, data: { groups: { connect: { id: body.targetGroupId } } } });
       }
     }
@@ -271,7 +375,7 @@ export class CustomersService {
   }
 
   async programs(id: string, actor?: any) {
-    if (this.partnerGroupId(actor)) throw new ForbiddenException('Partner dastur tafsilotlarini ko\'ra olmaydi');
+    if (isPartner(actor)) throw new ForbiddenException('Partner dastur tafsilotlarini ko\'ra olmaydi');
     const customer: any = await this.get(id, actor);
     return { items: customer.programs || [], total: customer.programs?.length || 0 };
   }
@@ -291,19 +395,19 @@ export class CustomersService {
     return this.update(id, { programs: (current.programs || []).filter((p: any) => p.id !== programId) }, actor);
   }
 
-  async filterOptions() {
-    const customers = await this.prisma.customer.findMany({ where: { deletedAt: null } });
+  async filterOptions(actor?: any) {
+    const customers = await this.prisma.customer.findMany({
+      where: { deletedAt: null, ...customerScopeWhere(actor) },
+      select: { address: true, stageId: true },
+    });
     const cities = new Set<string>();
-    const programs = new Set<string>();
     const stageCounts: Record<string, number> = {};
     customers.forEach((c) => {
       const city = (c.address as any)?.city;
       if (city) cities.add(city);
-      if (c.service) programs.add(c.service);
-      if (Array.isArray(c.programs)) c.programs.forEach((p: any) => p.name && programs.add(p.name));
       stageCounts[c.stageId] = (stageCounts[c.stageId] || 0) + 1;
     });
-    return { cities: [...cities], programs: [...programs], stageCounts };
+    return { cities: [...cities], stageCounts };
   }
 
   private canViewAll(actor?: any) {
@@ -316,26 +420,190 @@ export class CustomersService {
       partner: Boolean(partnerGroupId),
       partnerGroupId: partnerGroupId || undefined,
       hideInternalNotes: !this.canViewComments(actor),
+      hideFollowUps: !this.canViewFollowUps(actor),
+      hideActivitySummary: !this.canViewActivities(actor),
+      hideLastContact: !this.canViewLastContact(actor),
+      fieldVisibility: {
+        phone: this.canViewField(actor, 'phone'),
+        amount: this.canViewField(actor, 'amount'),
+        deposit: this.canViewField(actor, 'deposit'),
+      },
+      hideCreator: !this.canViewCreator(customer, actor),
     });
+  }
+
+  private canViewCreator(customer: any, actor?: any) {
+    if (!actor || isPartner(actor)) return false;
+    if (isAdmin(actor)) return true;
+    if (customer.createdById && customer.createdById === actor.id) return true;
+    return Boolean(actor.permissions?.includes('customers.viewCreatedBy') || actor.permissions?.includes('customers.viewAll'));
+  }
+
+  private async attachActivitySummaries(customers: any[]) {
+    const ids = customers.map((customer) => customer.id).filter(Boolean);
+    if (!ids.length || !this.prisma.activity?.findMany) return customers;
+    const activities = await this.prisma.activity.findMany({
+      where: { customerId: { in: ids }, type: { in: LAST_CONTACT_ACTIVITY_TYPES } },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        customerId: true,
+        type: true,
+        message: true,
+        createdAt: true,
+        createdBy: { select: { id: true, name: true, avatarUrl: true } },
+      },
+    });
+    const latestByCustomer = new Map<string, any>();
+    for (const activity of activities) {
+      if (!latestByCustomer.has(activity.customerId)) latestByCustomer.set(activity.customerId, activity);
+    }
+    return customers.map((customer) => ({
+      ...customer,
+      latestActivity: latestByCustomer.get(customer.id) || null,
+      lastContact: latestByCustomer.get(customer.id) || null,
+    }));
+  }
+
+  private ensureCoreEdit(body: any, actor?: any) {
+    if (canEditCustomerCore(actor)) return;
+    const coreFields = [
+      'name', 'firstName', 'lastName', 'phone', 'phone2', 'telegram', 'email',
+      'service', 'programs', 'amount', 'depositAmount', 'notes', 'note', 'status',
+      'currencyId', 'currencyCode', 'address', 'latitude', 'longitude',
+      'birthDate', 'telegramUsername', 'instagram', 'source', 'customFields',
+    ];
+    if (coreFields.some((field) => body[field] !== undefined)) {
+      throw new ForbiddenException('Customer asosiy ma\'lumotlarini o\'zgartirishga ruxsat yo\'q');
+    }
   }
 
   private canViewComments(actor?: any) {
     return Boolean(actor && (['ADMIN', 'SUPER_ADMIN'].includes(String(actor.role || '').toUpperCase()) || actor.permissions?.includes('comments.view')));
   }
 
-  private ownershipWhere(actor?: any) {
-    if (!actor || this.canViewAll(actor) || this.partnerGroupId(actor)) return {};
-    return this.employeeScopeWhere(actor);
+  private canViewFollowUps(actor?: any) {
+    return Boolean(actor && (isAdmin(actor) || actor.permissions?.includes('reminders.view') || actor.permissions?.includes('calls.view')));
   }
 
-  // Preserve the local employee-scope contract while keeping partner access
-  // on the newer partnerGroup/session path above.
-  private employeeScopeWhere(actor?: any) {
-    if (actor?.customerScope === 'GROUPS' || actor?.permissions?.includes('customers.viewGroups')) {
-      const groupIds = (actor?.allowedCustomerGroups || []).map((item: any) => item.groupId).filter(Boolean);
-      return groupIds.length ? { groups: { some: { id: { in: groupIds } } } } : { id: '__no_customer_scope__' };
+  private canViewActivities(actor?: any) {
+    return Boolean(actor && (isAdmin(actor) || actor.permissions?.includes('activities.view')));
+  }
+
+  private canViewLastContact(actor?: any) {
+    if (!actor || isPartner(actor)) return false;
+    return Boolean(
+      isAdmin(actor)
+      || actor.permissions?.includes('activities.view')
+      || actor.permissions?.includes('history.view')
+      || actor.permissions?.includes('calls.view')
+      || actor.permissions?.includes('comments.view'),
+    );
+  }
+
+  private canViewField(actor: any, field: 'phone' | 'amount' | 'deposit') {
+    if (!actor || isAdmin(actor)) return true;
+    if (isPartner(actor)) return field === 'phone';
+    if (field === 'amount') return canViewCustomerAmount(actor);
+    if (field === 'deposit') return canViewCustomerDeposit(actor);
+    const permission = field === 'phone' ? 'customers.viewPhone' : field === 'amount' ? 'customers.viewAmount' : 'customers.viewDeposit';
+    return actor.permissions?.includes(permission) || actor.permissions?.includes(`${field}.view`);
+  }
+
+  private ensurePartnerConfigured(actor?: any) {
+    if (String(actor?.role || '').toUpperCase() === 'PARTNER' && !this.partnerGroupId(actor)) {
+      throw new ForbiddenException('Partner guruhi biriktirilmagan');
     }
-    return { assignedEmployeeId: actor?.id };
+  }
+
+  private ensurePartnerCannotWrite(actor?: any) {
+    this.ensurePartnerConfigured(actor);
+    if (isPartner(actor)) throw new ForbiddenException('Partner faqat biriktirilgan mijozlarni ko\'rishi mumkin');
+  }
+
+  private async resolveCreateGroupIds(body: any, actor?: any) {
+    const requested = this.normalizeGroupIds(body.groupIds, body.groupId || body.currentGroupId);
+    if (isAdmin(actor)) return requested;
+    if (isPartner(actor)) throw new ForbiddenException('Partner yangi mijoz qo\'sha olmaydi');
+    const role = String(actor?.role || '').toUpperCase();
+    if (role !== 'EMPLOYEE') return requested;
+    const visibility = String(actor?.customerVisibility || 'ASSIGNED').toUpperCase();
+    const allowed = this.allowedGroupIds(actor);
+    if (requested.some((groupId) => !allowed.includes(groupId))) {
+      throw new ForbiddenException('Siz faqat ruxsat berilgan guruhga mijoz qo\'sha olasiz');
+    }
+    if (visibility === 'GROUPS') {
+      if (!allowed.length) throw new ForbiddenException('Sizga ruxsat berilgan guruh biriktirilmagan');
+      return requested.length ? requested : allowed;
+    }
+    if (requested.length) throw new ForbiddenException('Sizga guruhga mijoz qo\'shishga ruxsat berilmagan');
+    return [];
+  }
+
+  private async assertEmployeeGroupWrite(groupIds: string[], actor?: any) {
+    if (!actor || isAdmin(actor) || isPartner(actor)) return;
+    if (String(actor.role || '').toUpperCase() !== 'EMPLOYEE') return;
+    const allowed = this.allowedGroupIds(actor);
+    if (groupIds.some((groupId) => !allowed.includes(groupId))) {
+      throw new ForbiddenException('Siz faqat ruxsat berilgan guruhlar bilan ishlay olasiz');
+    }
+  }
+
+  private allowedGroupIds(actor?: any) {
+    if (Array.isArray(actor?.allowedGroupIds)) return actor.allowedGroupIds;
+    return Array.isArray(actor?.allowedGroups) ? actor.allowedGroups.map((item: any) => item.groupId || item.group?.id).filter(Boolean) : [];
+  }
+
+  private async persistQuickActions(customer: any, actions: any, actor?: any) {
+    if (!Array.isArray(actions) || !actions.length) return [];
+    const errors: any[] = [];
+    for (const action of actions) {
+      try {
+        const type = String(action?.type || '').toUpperCase();
+        if (type === 'CALL' || type === 'REMINDER') {
+          const permission = type === 'CALL' ? 'calls.create' : 'reminders.create';
+          if (!isAdmin(actor) && !actor?.permissions?.includes(permission)) throw new ForbiddenException('Bu eslatma turini yaratishga ruxsat yo\'q');
+          const remindAt = this.toDate(action.remindAt || action.date);
+          const reminder = await this.scheduleReminder(customer, remindAt, actor, type === 'CALL' ? 'CALL' : 'REPEAT_SALE', action.note || action.comment);
+          await this.prisma.customer.update({ where: { id: customer.id }, data: { nextContactAt: remindAt } });
+          if (!reminder) throw new ForbiddenException('Eslatma uchun mas\'ul xodim topilmadi');
+        } else if (type === 'TASK') {
+          if (!isAdmin(actor) && !actor?.permissions?.includes('tasks.create')) throw new ForbiddenException('Vazifa yaratishga ruxsat yo\'q');
+          const title = String(action.title || '').trim();
+          if (!title) throw new ForbiddenException('Vazifa sarlavhasi kiritilishi shart');
+          const assignedToId = action.assignedToId || action.assignedEmployeeId || actor?.id;
+          if (!isAdmin(actor) && assignedToId !== actor?.id) throw new ForbiddenException('Vazifani faqat o\'zingizga biriktirishingiz mumkin');
+          const task = await this.prisma.task.create({
+            data: {
+              title,
+              description: action.note || action.description || null,
+              status: 'TODO' as any,
+              priority: action.priority || 'MEDIUM',
+              dueDate: action.dueDate || action.deadline || null,
+              assignedToId,
+              assignedEmployeeId: assignedToId,
+              createdById: actor?.id || null,
+              customerId: customer.id,
+            } as any,
+          });
+          await this.createActivity(customer.id, 'TASK_CREATED', `Vazifa yaratildi: ${title}`, actor?.id, { taskId: task.id });
+        } else if (type === 'NOTE') {
+          if (!isAdmin(actor) && !actor?.permissions?.includes('comments.create')) throw new ForbiddenException('Izoh qo\'shishga ruxsat yo\'q');
+          const message = String(action.text || action.message || action.note || '').trim();
+          if (!message) throw new ForbiddenException('Izoh matni bo\'sh bo\'lishi mumkin emas');
+          await this.createActivity(customer.id, 'NOTE', message, actor?.id);
+        }
+      } catch (error: any) {
+        // The customer is already committed. Return a machine-readable warning
+        // so a failed optional action never rolls back or hides the customer.
+        errors.push({ type: action?.type || 'UNKNOWN', message: error?.message || 'Quick action saqlanmadi' });
+      }
+    }
+    return errors;
+  }
+
+  private ownershipWhere(actor?: any) {
+    return customerScopeWhere(actor);
   }
 
   private contactOrder(a: any, b: any) {
@@ -375,6 +643,20 @@ export class CustomersService {
         : await this.prisma.currency.findFirst({ where: { isDefault: true, isActive: true }, select: { id: true } });
     if (!item) throw new ConflictException('Faol valyuta topilmadi');
     return item.id;
+  }
+
+  private async resolveBusinessTypeIds(values: any, legacyValue?: any) {
+    const rawValues = Array.isArray(values)
+      ? values
+      : values !== undefined
+        ? values === null || values === '' ? [] : [values]
+        : legacyValue === undefined || legacyValue === null || legacyValue === '' ? [] : [legacyValue];
+    const ids = [...new Set(rawValues.map((value) => String(value || '').trim()).filter(Boolean))];
+    if (!ids.length) return [];
+    const items = await this.prisma.businessType.findMany({ where: { id: { in: ids } }, select: { id: true } });
+    const found = new Set(items.map((item) => item.id));
+    if (ids.some((id) => !found.has(id))) throw new ConflictException('Biznes turi topilmadi');
+    return ids;
   }
 
   private async createStageAutomation(customer: any, stageId: string, actor?: any) {
@@ -483,12 +765,15 @@ export class CustomersService {
     return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
   }
 
-  private async syncPartnerReward(customerId: string, completedAt: Date) {
+  private async syncPartnerReward(customerId: string, completedAt: Date, previousWasFinal = false) {
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, include: { groups: true, stage: true } });
-    if (!customer?.stage?.isFinal) return;
+    if (!customer?.stage) return;
+    // A customer coming back from a completed/final stage is not a new
+    // referral flow, even if the configured reward stage is reached again.
+    if (previousWasFinal || (await this.hasPriorFinalStageHistory(customerId, completedAt))) return;
     const period = `${completedAt.getUTCFullYear()}-${String(completedAt.getUTCMonth() + 1).padStart(2, '0')}`;
     await Promise.all(
-      customer.groups.map((group) =>
+      customer.groups.filter((group: any) => group.rewardStageId && group.rewardStageId === customer.stageId).map((group) =>
         this.prisma.partnerReward.upsert({
           where: { groupId_customerId: { groupId: group.id, customerId } },
           update: {},
@@ -502,5 +787,34 @@ export class CustomersService {
         }),
       ),
     );
+  }
+
+  private async hasPriorFinalStageHistory(customerId: string, before: Date) {
+    const history = (this.prisma as any).customerStageHistory;
+    if (!history?.findFirst) return false;
+    const priorFinal = await history.findFirst({
+      where: {
+        customerId,
+        changedAt: { lt: before },
+        OR: [{ fromIsFinal: true }, { toIsFinal: true }],
+      },
+      select: { id: true },
+    });
+    return Boolean(priorFinal);
+  }
+
+  private async recordStageHistory(customerId: string, fromStageId: string | null, toStage: any, changedAt: Date, fromIsFinal = false, toIsFinal = false) {
+    const history = (this.prisma as any).customerStageHistory;
+    if (!history?.create || !toStage?.id) return;
+    await history.create({
+      data: {
+        customerId,
+        fromStageId,
+        toStageId: toStage.id,
+        fromIsFinal,
+        toIsFinal,
+        changedAt,
+      },
+    });
   }
 }

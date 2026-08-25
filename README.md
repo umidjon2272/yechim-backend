@@ -32,6 +32,11 @@ Root Directory: backend
 Build Command: npm install && npx prisma generate && npm run build
 Pre-deploy/Migration Command: npx prisma migrate deploy
 Start Command: npm run start:prod
+
+`npm run build` emits the canonical `dist/main.js` entrypoint and also keeps a
+temporary compatibility entrypoint at `dist/src/main.js` for older Render
+service settings. Update Render Start Command to `npm run start:prod` when
+possible.
 ```
 
 Required environment variables:
@@ -51,11 +56,16 @@ ADMIN_PASSWORD=
 
 `FRONTEND_URL` must be the exact Vercel origin (no `/` at the end); multiple
 origins may be comma-separated. `JWT_SECRET` and `JWT_REFRESH_SECRET` must be
-long random production-only values. The frontend stores the token pair in each
-tab's `sessionStorage` and sends the access token as `Authorization: Bearer`.
-The backend does not use browser-wide auth cookies; old cookie names are only
-expired as a migration cleanup.
+long random production-only values. The frontend stores only the access/refresh
+token pair in `localStorage` so an installed PWA can restore a still-valid
+session, and sends the access token as `Authorization: Bearer`. The backend
+does not use browser-wide auth cookies; old cookie names are only expired as a
+migration cleanup. Every app launch must still validate the token through
+`/api/auth/me`.
 
 Run `npm run seed` once after the first deploy to create the admin configured
 by `ADMIN_EMAIL`/`ADMIN_PASSWORD`, the `Asosiy savdo` pipeline, and the 9
-default customer stages. There is no built-in production admin password.
+default customer stages. On a new empty database it also creates the initial
+customer groups; those groups are marked as seeded and are never recreated by
+later seed/deploy runs after an admin deletes one. There is no built-in
+production admin password.

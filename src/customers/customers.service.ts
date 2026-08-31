@@ -9,7 +9,10 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const includeCustomer = {
   assignedEmployee: { include: { team: true } },
-  createdBy: { include: { team: true } },
+  // Only id/name/avatarUrl are ever read off createdBy (see customerDto), so
+  // this stays a `select` rather than pulling the full user row (+ team join)
+  // for every customer in a list response.
+  createdBy: { select: { id: true, name: true, avatarUrl: true } },
   installerEmployee: { include: { team: true } },
   groups: true,
   partnerRewards: true,
@@ -442,9 +445,14 @@ export class CustomersService {
   private async attachActivitySummaries(customers: any[]) {
     const ids = customers.map((customer) => customer.id).filter(Boolean);
     if (!ids.length || !this.prisma.activity?.findMany) return customers;
+    // `distinct` + an orderBy that starts with the distinct column lets
+    // Postgres return exactly one (the newest) row per customer instead of
+    // the whole matching activity history, which otherwise grows without
+    // bound as a customer accumulates activity over time.
     const activities = await this.prisma.activity.findMany({
       where: { customerId: { in: ids }, type: { in: LAST_CONTACT_ACTIVITY_TYPES } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ customerId: 'asc' }, { createdAt: 'desc' }],
+      distinct: ['customerId'],
       select: {
         id: true,
         customerId: true,
@@ -456,7 +464,7 @@ export class CustomersService {
     });
     const latestByCustomer = new Map<string, any>();
     for (const activity of activities) {
-      if (!latestByCustomer.has(activity.customerId)) latestByCustomer.set(activity.customerId, activity);
+      latestByCustomer.set(activity.customerId, activity);
     }
     return customers.map((customer) => ({
       ...customer,

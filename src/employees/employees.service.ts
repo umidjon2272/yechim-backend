@@ -5,7 +5,15 @@ import { ALL_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } from '../common/defaults';
 import { publicUser, taskDto, uniqueConflict } from '../common/mappers';
 import { PrismaService } from '../prisma/prisma.service';
 
-const employeeInclude = { team: true, partnerGroup: true, allowedGroups: { include: { group: true } } } as const;
+// publicUser() only ever reads id/name off team and partnerGroup, and
+// groupId/group.id/group.name off allowedGroups, so select just that instead
+// of the full related rows (avoids shipping every employee's passwordHash
+// etc. back out of the DB for each row of a paginated list).
+const employeeInclude = {
+  team: { select: { id: true, name: true } },
+  partnerGroup: { select: { id: true, name: true } },
+  allowedGroups: { select: { groupId: true, group: { select: { id: true, name: true } } } },
+} as const;
 
 @Injectable()
 export class EmployeesService {

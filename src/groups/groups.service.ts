@@ -22,7 +22,7 @@ export class GroupsService {
     }
     const [total, items] = await Promise.all([
       this.prisma.customerGroup.count({ where }),
-      this.prisma.customerGroup.findMany({ where, include: { partnerUsers: { select: { id: true, name: true, username: true, status: true } }, rewardStage: true }, orderBy: { createdAt: 'desc' }, skip, take }),
+      this.prisma.customerGroup.findMany({ where, include: { partnerUsers: { select: { id: true, name: true, username: true, status: true } }, rewardStage: { select: { id: true, label: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),
     ]);
     return paged(items.map((item) => this.dto(item, Boolean(partnerGroupId))), total, page, pageSize);
   }
@@ -57,7 +57,7 @@ export class GroupsService {
     if (!isAdmin(actor) && !this.isPartner(actor)) throw new ForbiddenException('Partner hisoboti faqat Partner yoki admin uchun');
     const partnerGroupId = this.partnerGroupId(actor);
     if (partnerGroupId && partnerGroupId !== id) throw new ForbiddenException('Faqat o\'zingizga biriktirilgan guruhni ko\'rishingiz mumkin');
-    const group = await this.prisma.customerGroup.findUnique({ where: { id }, include: { partnerUsers: { select: { id: true, name: true, username: true, status: true } }, rewardStage: true } });
+    const group = await this.prisma.customerGroup.findUnique({ where: { id }, include: { partnerUsers: { select: { id: true, name: true, username: true, status: true } }, rewardStage: { select: { id: true, label: true } } } });
     if (!group) throw new NotFoundException('Guruh topilmadi');
     const range = this.resolveRange(query);
     const period = range.period;

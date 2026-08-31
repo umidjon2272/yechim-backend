@@ -69,3 +69,24 @@ default customer stages. On a new empty database it also creates the initial
 customer groups; those groups are marked as seeded and are never recreated by
 later seed/deploy runs after an admin deletes one. There is no built-in
 production admin password.
+
+## Neon connection pooling
+
+`PrismaService` runs as a single long-lived client for the life of the Render
+process (see `src/prisma/prisma.service.ts`), so it keeps its own connection
+pool open across requests — it is not a per-request/serverless connection.
+Two Neon-specific settings matter for request latency:
+
+- **Use Neon's pooled endpoint** (the host with an `-pooler` suffix) in
+  `DATABASE_URL`, with `?pgbouncer=true&connection_limit=10&pool_timeout=20`
+  (tune `connection_limit` to Render's CPU/RAM tier — Prisma's own default is
+  only `num_cpus * 2 + 1`, which is too small for a handful of endpoints that
+  each issue several queries per request and can leave requests queueing for
+  a pooled connection under concurrent load).
+- **Check Neon's autosuspend/scale-to-zero setting** on the production
+  branch. A suspended compute takes noticeably longer (often 1s+) to resume
+  on the first query after idle; every request in this app pays that cost
+  identically regardless of which endpoint it hits, which is a common cause
+  of uniformly slow requests across otherwise cheap and expensive endpoints
+  alike. For a production API, prefer a Neon plan/branch with autosuspend
+  disabled (or a long idle timeout) over tuning application code further.

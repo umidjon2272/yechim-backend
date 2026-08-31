@@ -232,6 +232,9 @@ model Customer {
   @@index([currencyId])
   @@index([businessTypeId])
   @@index([createdById])
+  // Serves the default customer list query (deletedAt IS NULL ordered by
+  // createdAt desc) without a separate sort step.
+  @@index([deletedAt, createdAt])
 }
 
 model CustomerBusinessType {
@@ -534,6 +537,9 @@ model Activity {
 
   @@index([customerId, createdAt])
   @@index([type])
+  // Serves the "latest matching activity per customer" lookup (customer list
+  // summaries and note previews) via an index-only distinct-on-customerId scan.
+  @@index([customerId, type, createdAt])
 }
 
 model Reminder {

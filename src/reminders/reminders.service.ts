@@ -85,26 +85,28 @@ export class RemindersService {
   async ensureDueNotifications(user: any) {
     this.ensureNotPartner(user);
     const where: any = { status: 'PENDING' as any, remindAt: { lte: new Date() }, assignedUserId: user.id };
-    const due = await this.prisma.reminder.findMany({ where, include: { customer: true } });
-    for (const reminder of due) {
-      const overdue = new Date(reminder.remindAt).getTime() < Date.now();
-      const title = overdue ? 'Kechikkan eslatma' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? "Qo'ng'iroq vaqti" : 'Eslatma';
-      const customerName = reminder.customer?.name || reminder.title;
-      const message = `${customerName}\n${this.formatReminderDate(reminder.remindAt)}`;
-      await this.prisma.notification.upsert({
-        where: { reminderId: reminder.id },
-        update: { type: overdue ? 'reminder_overdue' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? 'follow_up' : 'reminder', title, message, entityType: 'customer', entityId: reminder.customerId },
-        create: {
-          userId: user.id,
-          reminderId: reminder.id,
-          type: overdue ? 'reminder_overdue' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? 'follow_up' : 'reminder',
-          title,
-          message,
-          entityType: 'customer',
-          entityId: reminder.customerId,
-        },
-      });
-    }
+    const due = await this.prisma.reminder.findMany({
+      where,
+      select: { id: true, remindAt: true, type: true, title: true, customerId: true, customer: { select: { name: true } } },
+    });
+    if (!due.length) return;
+    // Independent per-reminder upserts (keyed by the unique reminderId), so
+    // running them concurrently instead of one-by-one is safe and avoids
+    // paying a full DB round trip per due reminder.
+    await Promise.all(
+      due.map((reminder) => {
+        const overdue = new Date(reminder.remindAt).getTime() < Date.now();
+        const type = overdue ? 'reminder_overdue' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? 'follow_up' : 'reminder';
+        const title = overdue ? 'Kechikkan eslatma' : reminder.type === 'CALL' || reminder.type === 'FOLLOW_UP' ? "Qo'ng'iroq vaqti" : 'Eslatma';
+        const customerName = reminder.customer?.name || reminder.title;
+        const message = `${customerName}\n${this.formatReminderDate(reminder.remindAt)}`;
+        return this.prisma.notification.upsert({
+          where: { reminderId: reminder.id },
+          update: { type, title, message, entityType: 'customer', entityId: reminder.customerId },
+          create: { userId: user.id, reminderId: reminder.id, type, title, message, entityType: 'customer', entityId: reminder.customerId },
+        });
+      }),
+    );
   }
 
   async todayWork(user: any) {

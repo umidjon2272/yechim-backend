@@ -161,6 +161,71 @@ assert.deepEqual(scopedCustomerWhere.groups, { some: { id: 'other-group' } }, 'a
 await scopedCustomerService.list({ groupId: 'other-group' }, { id: 'admin-1', role: 'ADMIN', partnerGroupId: 'group-1' });
 assert.deepEqual(scopedCustomerWhere.groups, { some: { id: 'other-group' } }, 'admin is never narrowed by a stale partner group');
 
+// customers.list() now fetches relations as several independently-issued
+// findMany calls (see CustomersService.listWithRelations) and re-merges them
+// by customer id instead of one big `include`. Every prior scopedCustomerService
+// case above returns `[]` and can't exercise that merge, so stub a single
+// full-shaped row and confirm the merged + customerDto-mapped output still
+// carries every relation-derived field the old single-query include produced.
+const listMergeCustomer = {
+  id: 'list-merge-customer-1',
+  name: 'Merge test',
+  stageId: 'NEW',
+  stage: { id: 'NEW', label: 'Yangi', isFinal: false },
+  assignedEmployeeId: 'employee-1',
+  assignedEmployee: { id: 'employee-1', name: 'Sardor', team: null },
+  installerEmployeeId: null,
+  installerEmployee: null,
+  createdById: 'employee-1',
+  createdBy: { id: 'employee-1', name: 'Sardor', avatarUrl: null },
+  currencyId: null,
+  currency: null,
+  businessTypeId: null,
+  businessType: null,
+  groups: [{ id: 'group-1', name: 'Referral' }],
+  businessTypeLinks: [],
+  businesses: [{ id: 'business-1', name: 'Biznes', createdAt: now }],
+  activities: [{ id: 'note-1', type: 'NOTE', message: 'Salom', createdAt: now, createdBy: { id: 'employee-1', name: 'Sardor' } }],
+  reminders: [{ id: 'reminder-1', type: 'CALL', title: "Qo'ng'iroq", note: null, remindAt: todayAtThree, status: 'PENDING' }],
+  createdAt: now,
+  updatedAt: now,
+};
+let listMergeFindManyCalls = 0;
+const listMergeService = new CustomersService({
+  customer: {
+    findMany: async () => { listMergeFindManyCalls += 1; return [listMergeCustomer]; },
+    count: async () => 1,
+  },
+  activity: { findMany: async () => [] },
+} as any);
+const mergedList = await listMergeService.list({}, { id: 'admin-1', role: 'ADMIN', permissions: [] });
+assert.ok(listMergeFindManyCalls >= 3, 'admin customer list issues separate relation queries that run in parallel');
+assert.equal(mergedList.items[0].groupIds[0], 'group-1', 'merged list result carries groups from the relation query');
+assert.equal(mergedList.items[0].business.id, 'business-1', 'merged list result carries the primary business');
+assert.equal(mergedList.items[0].latestNote.message, 'Salom', 'merged list result carries the latest note activity');
+assert.equal(mergedList.items[0].nextReminder.id, 'reminder-1', 'merged list result carries the next reminder');
+assert.equal(mergedList.items[0].assignedEmployee.id, 'employee-1', 'merged list result carries the assigned employee');
+assert.equal(mergedList.total, 1, 'merged list result uses the count query total');
+
+let partnerMergeFindManyCalls = 0;
+const partnerMergeService = new CustomersService({
+  customer: {
+    findMany: async ({ select, include }: any) => {
+      partnerMergeFindManyCalls += 1;
+      // A partner actor's DTO never reads assignedEmployee/groups/businesses/
+      // activities/reminders/currency/businessType, so listWithRelations must
+      // not even ask Prisma for them.
+      assert.equal(select?.groups, undefined, 'partner relation query never selects groups');
+      assert.equal(include?.assignedEmployee, undefined, 'partner core query never includes assignedEmployee');
+      return [{ id: 'partner-customer-2', name: 'Partner client', phone: '+998900000000', stageId: 'NEW', stage: { id: 'NEW', label: 'Yangi', isFinal: false }, partnerRewards: [{ groupId: 'group-1', amount: 50 }] }];
+    },
+  },
+  activity: { findMany: async () => [] },
+} as any);
+const partnerMerged = await partnerMergeService.list({}, { id: 'partner-2', role: 'PARTNER', partnerGroupId: 'group-1' });
+assert.equal(partnerMergeFindManyCalls, 2, 'partner list only issues the two relation groups it actually needs');
+assert.equal(partnerMerged.items[0].rewardAmount, 50, 'partner merged list result still computes reward amount');
+
 let adminCustomerCreatePayload: any;
 let adminCustomerUpdatePayload: any;
 const adminCustomerActivityPayloads: any[] = [];

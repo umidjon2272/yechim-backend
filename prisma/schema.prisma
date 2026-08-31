@@ -562,6 +562,9 @@ model Reminder {
 
   @@index([assignedUserId, status, remindAt])
   @@index([customerId, status])
+  // Serves the customer list's "next pending reminder per customer" lookup
+  // (filter customerId + status, ordered by remindAt) without a separate sort.
+  @@index([customerId, status, remindAt])
 }
 
 model Notification {

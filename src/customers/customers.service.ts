@@ -35,15 +35,6 @@ const includeCustomer = {
   },
 } as const;
 
-// List cards do not need the full customer relation graph. Keeping this
-// include separate prevents a paginated list from materialising every
-// business/activity/reminder relation for each row.
-const listIncludeCustomer = {
-  ...includeCustomer,
-  businesses: { take: 1, orderBy: { createdAt: 'asc' as const } },
-  partnerRewards: true,
-} as const;
-
 // A real customer touchpoint, not an internal state change or a reminder plan.
 const LAST_CONTACT_ACTIVITY_TYPES = ['CALL', 'FOLLOW_UP', 'MEETING', 'DEMO', 'NOTE', 'REMINDER_COMPLETED'];
 
@@ -100,13 +91,133 @@ export class CustomersService {
           : sort === 'createdAt'
             ? { createdAt: 'asc' as const }
             : { createdAt: 'desc' as const };
-    const customersPromise = this.prisma.customer.findMany({ where: baseWhere, include: listIncludeCustomer, orderBy, skip: (page - 1) * pageSize, take: pageSize });
+    const skip = (page - 1) * pageSize;
+    const take = pageSize;
+
+    const customersPromise = this.listWithRelations(baseWhere, orderBy, skip, take, actor);
     const totalPromise = typeof this.prisma.customer.count === 'function'
       ? this.prisma.customer.count({ where: baseWhere })
-      : customersPromise.then((items: any[]) => items.length);
+      : customersPromise.then((items) => items.length);
     const [customers, total] = await Promise.all([customersPromise, totalPromise]);
     const customersWithSummaries = await this.attachActivitySummaries(customers);
     return paged(customersWithSummaries.map((customer) => this.dto(customer, actor)), total, page, pageSize);
+  }
+
+  // The old approach ran one `findMany` with ~12 relations in its `include`.
+  // Every relation Prisma can't inline as a JOIN (all the to-many ones: groups,
+  // partnerRewards, businessTypeLinks, businesses, activities, reminders) costs
+  // its own DB round trip, and that round-trip count is fixed regardless of
+  // `pageSize` while each one's row volume scales with it — at pageSize=200
+  // that is a lot of serial network latency to Neon on top of a query that
+  // does no independent work otherwise.
+  //
+  // This splits the include into a handful of independently-fetched groups —
+  // (a) a "core" query for the always-needed to-one relations, (b) a group
+  // query for the list/relation fields, (c)/(d) two permission-gated groups
+  // that are skipped entirely when the actor can't see that data anyway
+  // (comments/follow-ups), and for a partner actor, everything the partner
+  // DTO never reads (assignedEmployee, groups, businesses, activities,
+  // reminders, currency, businessType) is skipped outright. All of that runs
+  // through `Promise.all` so it executes concurrently instead of chained
+  // behind one another, then gets merged back by customer id into the exact
+  // same nested shape the previous single `include` produced, so
+  // `customerDto()` and the API response are unchanged.
+  private async listWithRelations(where: any, orderBy: any, skip: number, take: number, actor?: any) {
+    const partner = isPartner(actor);
+    const needCurrency = !partner && canViewCustomerAmount(actor);
+    const needComments = !partner && this.canViewComments(actor);
+    const needFollowUps = !partner && this.canViewFollowUps(actor);
+
+    const corePromise = this.prisma.customer.findMany({
+      where,
+      orderBy,
+      skip,
+      take,
+      include: partner
+        ? { stage: true }
+        : {
+            assignedEmployee: { include: { team: true } },
+            installerEmployee: { include: { team: true } },
+            createdBy: { select: { id: true, name: true, avatarUrl: true } },
+            stage: true,
+            businessType: true,
+            ...(needCurrency ? { currency: true } : {}),
+          },
+    });
+    const listRelationsPromise = this.prisma.customer.findMany({
+      where,
+      orderBy,
+      skip,
+      take,
+      select: {
+        id: true,
+        ...(partner
+          ? { partnerRewards: true }
+          : {
+              groups: true,
+              businessTypeLinks: { include: { businessType: true } },
+              businesses: { take: 1, orderBy: { createdAt: 'asc' as const } },
+            }),
+      },
+    });
+    const activitiesPromise = needComments
+      ? this.prisma.customer.findMany({
+          where,
+          orderBy,
+          skip,
+          take,
+          select: {
+            id: true,
+            activities: {
+              where: { type: 'NOTE' },
+              orderBy: { createdAt: 'desc' as const },
+              take: 1,
+              include: { createdBy: { include: { team: true } } },
+            },
+          },
+        })
+      : null;
+    const remindersPromise = needFollowUps
+      ? this.prisma.customer.findMany({
+          where,
+          orderBy,
+          skip,
+          take,
+          select: {
+            id: true,
+            reminders: {
+              where: { status: 'PENDING' as any },
+              orderBy: { remindAt: 'asc' as const },
+              take: 1,
+              select: { id: true, type: true, title: true, note: true, remindAt: true, status: true },
+            },
+          },
+        })
+      : null;
+
+    const [core, listRelations, activityRows, reminderRows] = await Promise.all([
+      corePromise,
+      listRelationsPromise,
+      activitiesPromise,
+      remindersPromise,
+    ]);
+
+    const relationsById = new Map<string, any>(listRelations.map((row: any) => [row.id, row]));
+    const activitiesById = activityRows ? new Map<string, any>(activityRows.map((row: any) => [row.id, row])) : null;
+    const remindersById = reminderRows ? new Map<string, any>(reminderRows.map((row: any) => [row.id, row])) : null;
+
+    return core.map((customer: any) => {
+      const extra = relationsById.get(customer.id);
+      return {
+        ...customer,
+        groups: extra?.groups || [],
+        partnerRewards: extra?.partnerRewards || [],
+        businessTypeLinks: extra?.businessTypeLinks || [],
+        businesses: extra?.businesses || [],
+        activities: activitiesById?.get(customer.id)?.activities || [],
+        reminders: remindersById?.get(customer.id)?.reminders || [],
+      };
+    });
   }
 
   async get(id: string, actor?: any) {

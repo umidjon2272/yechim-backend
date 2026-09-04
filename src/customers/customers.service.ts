@@ -94,6 +94,88 @@ export class CustomersService {
     const skip = (page - 1) * pageSize;
     const take = pageSize;
 
+    const compact = String(query.compact || '').toLowerCase() === 'true';
+    if (compact) {
+      const partner = isPartner(actor);
+      const needCurrency = !partner && canViewCustomerAmount(actor);
+      const needComments = !partner && this.canViewComments(actor);
+      const needFollowUps = !partner && this.canViewFollowUps(actor);
+      const compactCustomersPromise = this.prisma.customer.findMany({
+        where: baseWhere,
+        orderBy,
+        skip,
+        take,
+        select: partner
+          ? {
+              id: true,
+              name: true,
+              phone: true,
+              stageId: true,
+              stage: { select: { id: true, label: true, isFinal: true } },
+              partnerRewards: { select: { groupId: true, amount: true } },
+            }
+          : {
+              id: true,
+              name: true,
+              phone: true,
+              service: true,
+              programs: true,
+              amount: true,
+              depositAmount: true,
+              currencyId: true,
+              businessTypeId: true,
+              notes: true,
+              note: true,
+              address: true,
+              status: true,
+              stageId: true,
+              pipelineId: true,
+              assignedEmployeeId: true,
+              createdById: true,
+              nextContactAt: true,
+              lastContactAt: true,
+              stageEnteredAt: true,
+              createdAt: true,
+              updatedAt: true,
+              stage: { select: { id: true, label: true, isFinal: true } },
+              assignedEmployee: { select: { id: true, name: true, avatarUrl: true, role: true, status: true, isActive: true } },
+              createdBy: { select: { id: true, name: true, avatarUrl: true } },
+              businessType: { select: { id: true, name: true, isActive: true } },
+              businessTypeLinks: { select: { businessType: { select: { id: true, name: true, isActive: true } } } },
+              ...(needCurrency ? { currency: { select: { id: true, code: true, name: true, symbol: true } } } : {}),
+              ...(needComments
+                ? {
+                    activities: {
+                      where: { type: 'NOTE' },
+                      orderBy: { createdAt: 'desc' as const },
+                      take: 1,
+                      select: {
+                        id: true,
+                        message: true,
+                        createdAt: true,
+                        createdBy: { select: { id: true, name: true, avatarUrl: true } },
+                      },
+                    },
+                  }
+                : {}),
+              ...(needFollowUps
+                ? {
+                    reminders: {
+                      where: { status: 'PENDING' as any },
+                      orderBy: { remindAt: 'asc' as const },
+                      take: 1,
+                      select: { id: true, type: true, title: true, note: true, remindAt: true, status: true },
+                    },
+                  }
+                : {}),
+            },
+      });
+      const totalPromise = this.prisma.customer.count({ where: baseWhere });
+      const [customers, total] = await Promise.all([compactCustomersPromise, totalPromise]);
+      const customersWithSummaries = this.canViewLastContact(actor) ? await this.attachActivitySummaries(customers) : customers;
+      return paged(customersWithSummaries.map((customer) => this.dto(customer, actor)), total, page, pageSize);
+    }
+
     const customersPromise = this.listWithRelations(baseWhere, orderBy, skip, take, actor);
     const totalPromise = typeof this.prisma.customer.count === 'function'
       ? this.prisma.customer.count({ where: baseWhere })

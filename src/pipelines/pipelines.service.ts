@@ -22,13 +22,13 @@ export class PipelinesService {
     return this.prisma.pipeline.findFirstOrThrow({ where: { name: DEFAULT_PIPELINE_NAME } });
   }
 
-  async stages(pipelineId?: string) {
+  async stages(pipelineId?: string, compact = false) {
     const pipeline = pipelineId ? await this.prisma.pipeline.findUnique({ where: { id: pipelineId } }) : await this.defaultPipeline();
     if (!pipeline) throw new NotFoundException('Pipeline topilmadi');
     const items = await this.prisma.stage.findMany({
       where: { pipelineId: pipeline.id },
       orderBy: { order: 'asc' },
-      include: { _count: { select: { customers: true } } },
+      ...(compact ? {} : { include: { _count: { select: { customers: true } } } }),
     });
     return { items: items.map((stage) => this.stageDto(stage)), total: items.length };
   }

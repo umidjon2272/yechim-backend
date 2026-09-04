@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { RequirePermissions } from '../permissions/permissions.decorator';
 import { PipelinesService } from './pipelines.service';
@@ -15,8 +15,8 @@ export class PipelinesController {
 
   @RequirePermissions('customers.view')
   @Get('meta/customer-stages')
-  listStages() {
-    return this.pipelines.stages();
+  listStages(@Query() query: any) {
+    return this.pipelines.stages(undefined, String(query.compact || '').toLowerCase() === 'true');
   }
 
   @RequirePermissions('customers.edit')

@@ -4,10 +4,12 @@ import { RemindersService } from '../reminders/reminders.service';
 
 @Injectable()
 export class NotificationsService {
+  private readonly dueNotificationSync = new Map<string, { at: number; promise: Promise<void> }>();
+
   constructor(private readonly prisma: PrismaService, private readonly reminders: RemindersService) {}
 
   async list(query: any, user: any) {
-    await this.reminders.ensureDueNotifications(user);
+    await this.ensureDueNotificationsOnce(user);
     const page = Math.max(Number(query.page || 1), 1);
     const pageSize = Math.min(Math.max(Number(query.pageSize || 50), 1), 200);
     const where = { userId: user.id };
@@ -25,7 +27,7 @@ export class NotificationsService {
   }
 
   async unreadCount(user: any) {
-    await this.reminders.ensureDueNotifications(user);
+    await this.ensureDueNotificationsOnce(user);
     return { count: await this.prisma.notification.count({ where: { userId: user.id, isRead: false } }) };
   }
 
@@ -39,6 +41,20 @@ export class NotificationsService {
   async markAllRead(user: any) {
     await this.prisma.notification.updateMany({ where: { userId: user.id, isRead: false }, data: { isRead: true, readAt: new Date() } });
     return { ok: true };
+  }
+
+
+  private ensureDueNotificationsOnce(user: any) {
+    const userId = String(user?.id || '');
+    if (!userId) return Promise.resolve();
+    const current = this.dueNotificationSync.get(userId);
+    if (current && Date.now() - current.at < 5000) return current.promise;
+    const promise = this.reminders.ensureDueNotifications(user).finally(() => {
+      const latest = this.dueNotificationSync.get(userId);
+      if (latest?.promise === promise && Date.now() - latest.at >= 5000) this.dueNotificationSync.delete(userId);
+    });
+    this.dueNotificationSync.set(userId, { at: Date.now(), promise });
+    return promise;
   }
 
   private dto(item: any) {

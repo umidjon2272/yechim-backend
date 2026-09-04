@@ -25,6 +25,19 @@ export class EmployeesService {
     const where = search
       ? { OR: [{ name: { contains: search, mode: 'insensitive' as const } }, { email: { contains: search, mode: 'insensitive' as const } }, { username: { contains: search, mode: 'insensitive' as const } }] }
       : {};
+    if (String(query.compact || '').toLowerCase() === 'true') {
+      const [total, users] = await Promise.all([
+        this.prisma.user.count({ where }),
+        this.prisma.user.findMany({
+          where,
+          select: { id: true, name: true, status: true, isActive: true },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take,
+        }),
+      ]);
+      return paged(users, total, page, pageSize);
+    }
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({ where, include: employeeInclude, orderBy: { createdAt: 'desc' }, skip, take }),

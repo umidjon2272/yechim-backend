@@ -20,6 +20,25 @@ export class GroupsService {
         : Array.isArray(actor?.allowedGroups) ? actor.allowedGroups.map((item: any) => item.groupId || item.group?.id).filter(Boolean) : [];
       where.id = { in: allowedGroupIds };
     }
+    if (String(query.compact || '').toLowerCase() === 'true') {
+      const [total, items] = await Promise.all([
+        this.prisma.customerGroup.count({ where }),
+        this.prisma.customerGroup.findMany({
+          where,
+          select: {
+            id: true,
+            name: true,
+            partnerRewardPerCustomer: true,
+            rewardStageId: true,
+            rewardStage: { select: { id: true, label: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take,
+        }),
+      ]);
+      return paged(items.map((item) => this.dto(item, Boolean(partnerGroupId))), total, page, pageSize);
+    }
     const [total, items] = await Promise.all([
       this.prisma.customerGroup.count({ where }),
       this.prisma.customerGroup.findMany({ where, include: { partnerUsers: { select: { id: true, name: true, username: true, status: true } }, rewardStage: { select: { id: true, label: true } } }, orderBy: { createdAt: 'desc' }, skip, take }),

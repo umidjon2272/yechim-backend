@@ -1,4 +1,15 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
+
 import { Request } from 'express';
 import { Public } from '../permissions/public.decorator';
 import { RequirePermissions } from '../permissions/permissions.decorator';
@@ -15,11 +26,21 @@ export class SupportController {
     return this.support.health();
   }
 
+  @Public()
+  @Get('health/db')
+  healthDb() {
+    return this.support.healthDb();
+  }
+
   @RequirePermissions('settings.view')
   @Get('roles')
   roles() {
     return {
-      items: ['ADMIN', 'EMPLOYEE'].map((name) => ({ id: name, name, permissions: ROLE_DEFAULT_PERMISSIONS[name] })),
+      items: ['ADMIN', 'EMPLOYEE'].map((name) => ({
+        id: name,
+        name,
+        permissions: ROLE_DEFAULT_PERMISSIONS[name],
+      })),
       total: 2,
     };
   }
@@ -74,13 +95,19 @@ export class SupportController {
 
   @RequirePermissions('settings.edit')
   @Post('business-types')
-  createBusinessType(@Body() body: any, @Req() req: Request & { user?: any }) {
+  createBusinessType(
+    @Body() body: any,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.createBusinessType(body, req.user);
   }
 
   @RequirePermissions('settings.edit')
   @Delete('business-types/:id')
-  deleteBusinessType(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+  deleteBusinessType(
+    @Param('id') id: string,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.deleteBusinessType(id, req.user);
   }
 
@@ -159,18 +186,28 @@ export class SupportController {
   @RequirePermissions('businesses.view')
   @Get('businesses/:id/products')
   businessProducts(@Param('id') id: string) {
-    return { items: [], total: 0, businessId: id };
+    return {
+      items: [],
+      total: 0,
+      businessId: id,
+    };
   }
 
   @RequirePermissions('leads.view')
   @Get('leads')
-  leads(@Query() query: any, @Req() req: Request & { user?: any }) {
+  leads(
+    @Query() query: any,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.leads(query, req.user);
   }
 
   @RequirePermissions('leads.view')
   @Get('leads/:id')
-  lead(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+  lead(
+    @Param('id') id: string,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.lead(id, req.user);
   }
 
@@ -200,13 +237,19 @@ export class SupportController {
 
   @RequirePermissions('deals.view')
   @Get('deals')
-  deals(@Query() query: any, @Req() req: Request & { user?: any }) {
+  deals(
+    @Query() query: any,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.deals(query, req.user);
   }
 
   @RequirePermissions('deals.view')
   @Get('deals/:id')
-  deal(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+  deal(
+    @Param('id') id: string,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.deal(id, req.user);
   }
 
@@ -224,62 +267,108 @@ export class SupportController {
 
   @RequirePermissions('deals.changeStage')
   @Patch('deals/:id/stage')
-  updateDealStage(@Param('id') id: string, @Body() body: any) {
-    return this.support.updateDeal(id, { stage: body.stage });
+  updateDealStage(
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.support.updateDeal(id, {
+      stage: body.stage,
+    });
   }
 
   @RequirePermissions('deals.view')
   @Get('deals/:dealId/items')
-  dealItems(@Param('dealId') dealId: string, @Req() req: Request & { user?: any }) {
+  dealItems(
+    @Param('dealId') dealId: string,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.dealItems(dealId, req.user);
   }
 
   @RequirePermissions('deals.edit')
   @Post('deals/:dealId/items')
-  createDealItem(@Param('dealId') dealId: string, @Body() body: any) {
+  createDealItem(
+    @Param('dealId') dealId: string,
+    @Body() body: any,
+  ) {
     return this.support.createDealItem(dealId, body);
   }
 
   @RequirePermissions('deals.edit')
   @Patch('deals/:dealId/items/:itemId')
-  updateDealItem(@Param('dealId') dealId: string, @Param('itemId') itemId: string, @Body() body: any) {
-    return this.support.updateDealItem(dealId, itemId, body);
+  updateDealItem(
+    @Param('dealId') dealId: string,
+    @Param('itemId') itemId: string,
+    @Body() body: any,
+  ) {
+    return this.support.updateDealItem(
+      dealId,
+      itemId,
+      body,
+    );
   }
 
   @RequirePermissions('deals.edit')
   @Delete('deals/:dealId/items/:itemId')
-  deleteDealItem(@Param('dealId') dealId: string, @Param('itemId') itemId: string) {
-    return this.support.deleteDealItem(dealId, itemId);
+  deleteDealItem(
+    @Param('dealId') dealId: string,
+    @Param('itemId') itemId: string,
+  ) {
+    return this.support.deleteDealItem(
+      dealId,
+      itemId,
+    );
   }
 
   @RequirePermissions('payments.view')
   @Get('payments')
-  payments(@Query() query: any, @Req() req: Request & { user?: any }) {
+  payments(
+    @Query() query: any,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.payments(query, req.user);
   }
 
   @RequirePermissions('payments.view')
   @Get('payments/:id')
-  payment(@Param('id') id: string, @Req() req: Request & { user?: any }) {
+  payment(
+    @Param('id') id: string,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.payment(id, req.user);
   }
 
   @RequirePermissions('payments.create')
   @Post('payments')
-  createPayment(@Body() body: any, @Req() req: Request & { user?: any }) {
+  createPayment(
+    @Body() body: any,
+    @Req() req: Request & { user?: any },
+  ) {
     return this.support.createPayment(body, req.user);
   }
 
   @RequirePermissions('customers.view')
   @Get('messages')
-  messages(@Query('customerId') customerId: string, @Req() req: Request & { user?: any }) {
-    return this.support.messages(customerId, req.user);
+  messages(
+    @Query('customerId') customerId: string,
+    @Req() req: Request & { user?: any },
+  ) {
+    return this.support.messages(
+      customerId,
+      req.user,
+    );
   }
 
   @RequirePermissions('customers.edit')
   @Post('messages')
-  createMessage(@Body() body: any, @Req() req: Request & { user?: any }) {
-    return this.support.createMessage(body, req.user);
+  createMessage(
+    @Body() body: any,
+    @Req() req: Request & { user?: any },
+  ) {
+    return this.support.createMessage(
+      body,
+      req.user,
+    );
   }
 
   @RequirePermissions('dashboard.view')
@@ -291,6 +380,9 @@ export class SupportController {
   @RequirePermissions('attachments.create')
   @Get('attachments')
   attachments() {
-    return { items: [], total: 0 };
+    return {
+      items: [],
+      total: 0,
+    };
   }
 }

@@ -10,8 +10,26 @@ export class SupportService {
   constructor(private readonly prisma: PrismaService) {}
 
   health() {
-    return { ok: true, service: 'yechim-crm-api', time: new Date().toISOString() };
+    return {
+      ok: true,
+      service: 'yechim-crm-api',
+      time: new Date().toISOString(),
+    };
   }
+
+  async healthDb() {
+    const startedAt = Date.now();
+
+    await this.prisma.$queryRaw`SELECT 1`;
+
+    return {
+      ok: true,
+      database: 'ok',
+      dbLatencyMs: Date.now() - startedAt,
+      time: new Date().toISOString(),
+    };
+  }
+  
 
   permissionsSchema() {
     const resources = [...new Set(ALL_PERMISSIONS.map((p) => p.split('.')[0]))];

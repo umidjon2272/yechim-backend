@@ -36,12 +36,33 @@ export class SupportService {
     );
   }
 
+  async team(id: string) {
+    const team = await this.prisma.team.findUnique({ where: { id }, include: { users: true } });
+    if (!team) throw new NotFoundException('Jamoa topilmadi');
+    return { ...team, membersCount: team.users.length, members: team.users.map((u) => ({ id: u.id, name: u.name })) };
+  }
+
   createTeam(body: any) {
     return this.prisma.team.create({ data: { name: body.name, description: body.description, status: body.status || 'active' } });
   }
 
-  updateTeam(id: string, body: any) {
-    return this.prisma.team.update({ where: { id }, data: { name: body.name, description: body.description, status: body.status } });
+  async updateTeam(id: string, body: any) {
+    const data: any = {};
+    if (body.name !== undefined) data.name = body.name;
+    if (body.description !== undefined) data.description = body.description;
+    if (body.status !== undefined) data.status = body.status;
+    if (Array.isArray(body.members)) {
+      data.users = { set: body.members.map((member: any) => ({ id: typeof member === 'string' ? member : member.id })).filter((item: any) => item.id) };
+    }
+    const team = await this.prisma.team.update({ where: { id }, data, include: { users: true } });
+    return { ...team, membersCount: team.users.length, members: team.users.map((u) => ({ id: u.id, name: u.name })) };
+  }
+
+  async deleteTeam(id: string) {
+    const team = await this.prisma.team.findUnique({ where: { id }, select: { id: true } });
+    if (!team) throw new NotFoundException('Jamoa topilmadi');
+    await this.prisma.team.delete({ where: { id } });
+    return { ok: true };
   }
 
   async customerOptions(actor?: any) {

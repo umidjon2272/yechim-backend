@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { RequireAnyPermission, RequirePermissions } from '../permissions/permissions.decorator';
 import { ActivitiesService } from './activities.service';
@@ -42,6 +42,12 @@ export class CommentsController {
   @Post()
   create(@Body() body: any, @Req() req: AuthRequest) {
     return this.activities.create({ ...body, type: 'NOTE' }, req.user);
+  }
+
+  @RequirePermissions('comments.create')
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() body: any, @Req() req: AuthRequest) {
+    return this.activities.updateComment(id, body, req.user);
   }
 
   @RequirePermissions('comments.create')

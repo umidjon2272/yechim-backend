@@ -36,6 +36,12 @@ export class SupportController {
     return this.support.teams(query);
   }
 
+  @RequirePermissions('teams.view')
+  @Get('teams/:id')
+  team(@Param('id') id: string) {
+    return this.support.team(id);
+  }
+
   @RequirePermissions('teams.create')
   @Post('teams')
   createTeam(@Body() body: any) {
@@ -46,6 +52,12 @@ export class SupportController {
   @Patch('teams/:id')
   updateTeam(@Param('id') id: string, @Body() body: any) {
     return this.support.updateTeam(id, body);
+  }
+
+  @RequirePermissions('teams.delete')
+  @Delete('teams/:id')
+  deleteTeam(@Param('id') id: string) {
+    return this.support.deleteTeam(id);
   }
 
   @RequirePermissions('customers.view')

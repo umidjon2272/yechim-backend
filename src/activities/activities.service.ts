@@ -50,6 +50,22 @@ export class ActivitiesService {
     return this.dto(item);
   }
 
+  async updateComment(id: string, body: any, user: any) {
+    const item = await this.prisma.activity.findUnique({ where: { id } });
+    if (!item || item.type !== 'NOTE') throw new NotFoundException('Izoh topilmadi');
+    await this.ensureCustomerAccess(item.customerId, user);
+    const canEdit = ['SUPER_ADMIN', 'ADMIN'].includes(String(user?.role || '').toUpperCase()) || item.createdById === user.id;
+    if (!canEdit) throw new ForbiddenException('Bu izohni tahrirlashga ruxsat yo\'q');
+    const message = String(body.message || body.text || body.description || '').trim();
+    if (!message) throw new ForbiddenException('Izoh matni bo\'sh bo\'lishi mumkin emas');
+    const updated = await this.prisma.activity.update({
+      where: { id },
+      data: { message },
+      include: { createdBy: { include: { team: true } } },
+    });
+    return this.dto(updated, user);
+  }
+
   async remove(id: string, user: any) {
     const item = await this.prisma.activity.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('Faoliyat topilmadi');

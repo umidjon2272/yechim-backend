@@ -98,82 +98,53 @@ export class CustomersService {
     if (compact) {
       const partner = isPartner(actor);
       const needCurrency = !partner && canViewCustomerAmount(actor);
-      const needComments = !partner && this.canViewComments(actor);
-      const needFollowUps = !partner && this.canViewFollowUps(actor);
-      const compactCustomersPromise = this.prisma.customer.findMany({
-        where: baseWhere,
-        orderBy,
-        skip,
-        take,
-        select: partner
-          ? {
-              id: true,
-              name: true,
-              phone: true,
-              stageId: true,
-              stage: { select: { id: true, label: true, isFinal: true } },
-              partnerRewards: { select: { groupId: true, amount: true } },
-            }
-          : {
-              id: true,
-              name: true,
-              phone: true,
-              service: true,
-              programs: true,
-              amount: true,
-              depositAmount: true,
-              currencyId: true,
-              businessTypeId: true,
-              notes: true,
-              note: true,
-              address: true,
-              status: true,
-              stageId: true,
-              pipelineId: true,
-              assignedEmployeeId: true,
-              createdById: true,
-              nextContactAt: true,
-              lastContactAt: true,
-              stageEnteredAt: true,
-              createdAt: true,
-              updatedAt: true,
-              stage: { select: { id: true, label: true, isFinal: true } },
-              assignedEmployee: { select: { id: true, name: true, avatarUrl: true, role: true, status: true, isActive: true } },
-              createdBy: { select: { id: true, name: true, avatarUrl: true } },
-              businessType: { select: { id: true, name: true, isActive: true } },
-              businessTypeLinks: { select: { businessType: { select: { id: true, name: true, isActive: true } } } },
-              ...(needCurrency ? { currency: { select: { id: true, code: true, name: true, symbol: true } } } : {}),
-              ...(needComments
-                ? {
-                    activities: {
-                      where: { type: 'NOTE' },
-                      orderBy: { createdAt: 'desc' as const },
-                      take: 1,
-                      select: {
-                        id: true,
-                        message: true,
-                        createdAt: true,
-                        createdBy: { select: { id: true, name: true, avatarUrl: true } },
-                      },
-                    },
-                  }
-                : {}),
-              ...(needFollowUps
-                ? {
-                    reminders: {
-                      where: { status: 'PENDING' as any },
-                      orderBy: { remindAt: 'asc' as const },
-                      take: 1,
-                      select: { id: true, type: true, title: true, note: true, remindAt: true, status: true },
-                    },
-                  }
-                : {}),
-            },
-      });
-      const totalPromise = this.prisma.customer.count({ where: baseWhere });
-      const [customers, total] = await Promise.all([compactCustomersPromise, totalPromise]);
-      const customersWithSummaries = this.canViewLastContact(actor) ? await this.attachActivitySummaries(customers) : customers;
-      return paged(customersWithSummaries.map((customer) => this.dto(customer, actor)), total, page, pageSize);
+      const coreSelect: any = partner
+        ? {
+            id: true,
+            name: true,
+            phone: true,
+            stageId: true,
+            stage: { select: { id: true, label: true, isFinal: true } },
+          }
+        : {
+            id: true,
+            name: true,
+            phone: true,
+            service: true,
+            programs: true,
+            amount: true,
+            depositAmount: true,
+            currencyId: true,
+            businessTypeId: true,
+            notes: true,
+            note: true,
+            address: true,
+            status: true,
+            stageId: true,
+            pipelineId: true,
+            assignedEmployeeId: true,
+            createdById: true,
+            nextContactAt: true,
+            lastContactAt: true,
+            stageEnteredAt: true,
+            installationAt: true,
+            installerEmployeeId: true,
+            createdAt: true,
+            updatedAt: true,
+            stage: { select: { id: true, label: true, isFinal: true } },
+            assignedEmployee: { select: { id: true, name: true, avatarUrl: true, role: true, status: true, isActive: true } },
+            createdBy: { select: { id: true, name: true, avatarUrl: true } },
+            businessType: { select: { id: true, name: true, isActive: true } },
+            installerEmployee: { select: { id: true, name: true, avatarUrl: true, role: true, status: true, isActive: true } },
+            ...(needCurrency ? { currency: { select: { id: true, code: true, name: true, symbol: true } } } : {}),
+          };
+
+      const [coreCustomers, total] = await Promise.all([
+        this.prisma.customer.findMany({ where: baseWhere, orderBy, skip, take, select: coreSelect }),
+        this.prisma.customer.count({ where: baseWhere }),
+      ]);
+      const customers = await this.attachCompactRelations(coreCustomers, actor);
+      return paged(customers.map((customer) => this.dto(customer, actor)), total, page, pageSize);
     }
 
     const customersPromise = this.listWithRelations(baseWhere, orderBy, skip, take, actor);
@@ -633,6 +604,94 @@ export class CustomersService {
     if (isAdmin(actor)) return true;
     if (customer.createdById && customer.createdById === actor.id) return true;
     return Boolean(actor.permissions?.includes('customers.viewCreatedBy') || actor.permissions?.includes('customers.viewAll'));
+  }
+
+  private async attachCompactRelations(customers: any[], actor?: any) {
+    const ids = customers.map((customer) => customer.id).filter(Boolean);
+    if (!ids.length) return customers;
+
+    if (isPartner(actor)) {
+      const rewards = await this.prisma.partnerReward.findMany({
+        where: { customerId: { in: ids } },
+        select: { customerId: true, groupId: true, amount: true },
+      });
+      const rewardsByCustomer = new Map<string, any[]>();
+      for (const reward of rewards) {
+        const list = rewardsByCustomer.get(reward.customerId) || [];
+        list.push(reward);
+        rewardsByCustomer.set(reward.customerId, list);
+      }
+      return customers.map((customer) => ({ ...customer, partnerRewards: rewardsByCustomer.get(customer.id) || [] }));
+    }
+
+    const needComments = this.canViewComments(actor);
+    const needFollowUps = this.canViewFollowUps(actor);
+    const needLastContact = this.canViewLastContact(actor);
+
+    const [businessTypeLinks, latestNotes, reminders, lastContacts] = await Promise.all([
+      this.prisma.customerBusinessType.findMany({
+        where: { customerId: { in: ids } },
+        select: { customerId: true, businessType: { select: { id: true, name: true, isActive: true } } },
+      }),
+      needComments
+        ? this.prisma.activity.findMany({
+            where: { customerId: { in: ids }, type: 'NOTE' },
+            orderBy: [{ customerId: 'asc' }, { createdAt: 'desc' }],
+            distinct: ['customerId'],
+            select: {
+              id: true,
+              customerId: true,
+              message: true,
+              createdAt: true,
+              createdBy: { select: { id: true, name: true, avatarUrl: true } },
+            },
+          })
+        : Promise.resolve([] as any[]),
+      needFollowUps
+        ? this.prisma.reminder.findMany({
+            where: { customerId: { in: ids }, status: 'PENDING' as any },
+            orderBy: [{ customerId: 'asc' }, { remindAt: 'asc' }],
+            distinct: ['customerId'],
+            select: { id: true, customerId: true, type: true, title: true, note: true, remindAt: true, status: true },
+          })
+        : Promise.resolve([] as any[]),
+      needLastContact
+        ? this.prisma.activity.findMany({
+            where: { customerId: { in: ids }, type: { in: LAST_CONTACT_ACTIVITY_TYPES } },
+            orderBy: [{ customerId: 'asc' }, { createdAt: 'desc' }],
+            distinct: ['customerId'],
+            select: {
+              id: true,
+              customerId: true,
+              type: true,
+              message: true,
+              createdAt: true,
+              createdBy: { select: { id: true, name: true, avatarUrl: true } },
+            },
+          })
+        : Promise.resolve([] as any[]),
+    ]);
+
+    const businessTypesByCustomer = new Map<string, any[]>();
+    for (const link of businessTypeLinks) {
+      const list = businessTypesByCustomer.get(link.customerId) || [];
+      list.push({ businessType: link.businessType });
+      businessTypesByCustomer.set(link.customerId, list);
+    }
+    const noteByCustomer = new Map(latestNotes.map((item: any) => [item.customerId, item]));
+    const reminderByCustomer = new Map(reminders.map((item: any) => [item.customerId, item]));
+    const contactByCustomer = new Map(lastContacts.map((item: any) => [item.customerId, item]));
+
+    return customers.map((customer) => ({
+      ...customer,
+      businessTypeLinks: businessTypesByCustomer.get(customer.id) || [],
+      activities: noteByCustomer.has(customer.id) ? [noteByCustomer.get(customer.id)] : [],
+      reminders: reminderByCustomer.has(customer.id) ? [reminderByCustomer.get(customer.id)] : [],
+      latestActivity: contactByCustomer.get(customer.id) || null,
+      lastContact: contactByCustomer.get(customer.id) || null,
+      groups: customer.groups || [],
+      businesses: customer.businesses || [],
+    }));
   }
 
   private async attachActivitySummaries(customers: any[]) {
